@@ -1,10 +1,12 @@
 import 'package:flutter/cupertino.dart';
 import 'package:intl/intl.dart';
-import '../models/post.dart';
+import 'dart:async';
 import '../models/district.dart';
-import '../services/analytics_service.dart';
+import '../services/analytics_service.dart' hide RiskLevel;
+import '../services/chatgpt_service.dart';
+import '../models/post.dart' show Post;
 
-class HistoricalDataScreen extends StatelessWidget {
+class HistoricalDataScreen extends StatefulWidget {
   final List<Post> posts;
   final List<District> districts;
 
@@ -15,11 +17,56 @@ class HistoricalDataScreen extends StatelessWidget {
   });
 
   @override
+  State<HistoricalDataScreen> createState() => _HistoricalDataScreenState();
+}
+
+class _HistoricalDataScreenState extends State<HistoricalDataScreen> {
+  final AnalyticsService _analyticsService = AnalyticsService();
+  final ChatGPTService? _chatGPTService = ChatGPTService(
+    apiKey:
+        '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',
+  );
+  String? _todaySummary;
+  bool _isLoadingTodaySummary = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadTodaySummary();
+  }
+
+  Future<void> _loadTodaySummary() async {
+    if (_chatGPTService == null) return;
+
+    setState(() {
+      _isLoadingTodaySummary = true;
+    });
+
+    try {
+      final summary = await _chatGPTService.generateTodayTrafficSummary(
+        widget.posts,
+      );
+      if (mounted) {
+        setState(() {
+          _todaySummary = summary;
+          _isLoadingTodaySummary = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading today summary: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingTodaySummary = false;
+        });
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final analyticsService = AnalyticsService();
-    final weeklyAccidents = analyticsService.getWeeklyAccidentCount(posts);
-    final congestedRoads = analyticsService.getMostCongestedRoads(posts);
-    final routeSafety = analyticsService.getRouteSafetyRatings(posts, districts);
+    final weeklyAccidents = _analyticsService.getWeeklyAccidentCount(widget.posts);
+    final congestedRoads = _analyticsService.getMostCongestedRoads(widget.posts);
+    final routeSafety = _analyticsService.getRouteSafetyRatings(widget.posts, widget.districts);
 
     final sortedWeeklyAccidents = weeklyAccidents.entries.toList()
       ..sort((a, b) => b.key.compareTo(a.key));
@@ -32,6 +79,128 @@ class HistoricalDataScreen extends StatelessWidget {
       child: SafeArea(
         child: CustomScrollView(
           slivers: [
+            // Today's Summary Section
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: CupertinoListSection.insetGrouped(
+                  header: const SizedBox.shrink(),
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              const Icon(
+                                CupertinoIcons.chart_bar_alt_fill,
+                                size: 16,
+                                color: CupertinoColors.systemBlue,
+                              ),
+                              const SizedBox(width: 6),
+                              const Text(
+                                'Today\'s Summary',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              const Spacer(),
+                              if (_chatGPTService != null)
+                                CupertinoButton(
+                                  padding: EdgeInsets.zero,
+                                  minSize: 0,
+                                  onPressed: _loadTodaySummary,
+                                  child: Icon(
+                                    CupertinoIcons.arrow_clockwise,
+                                    size: 14,
+                                    color: _isLoadingTodaySummary
+                                        ? CupertinoColors.tertiaryLabel
+                                        : CupertinoColors.systemBlue,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          if (_isLoadingTodaySummary)
+                            const CupertinoActivityIndicator(radius: 8)
+                          else if (_todaySummary != null) ...[
+                            Text(
+                              _todaySummary!,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: CupertinoColors.label,
+                                height: 1.4,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Builder(
+                              builder: (context) {
+                                final todayData = _analyticsService
+                                    .getTodayTrafficData(widget.posts);
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Color(
+                                      todayData.riskLevel.colorValue,
+                                    ).withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: Color(
+                                        todayData.riskLevel.colorValue,
+                                      ).withValues(alpha: 0.3),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        width: 6,
+                                        height: 6,
+                                        decoration: BoxDecoration(
+                                          color: Color(
+                                            todayData.riskLevel.colorValue,
+                                          ),
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        'Risk: ${todayData.riskLevel.displayName}',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(
+                                            todayData.riskLevel.colorValue,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                          ] else
+                            const Text(
+                              'Loading...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: CupertinoColors.secondaryLabel,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             // Weekly Accident Count
             SliverToBoxAdapter(
               child: Padding(
@@ -167,9 +336,9 @@ class HistoricalDataScreen extends StatelessWidget {
                         children: congestedRoads.asMap().entries.map((entry) {
                           final index = entry.key;
                           final road = entry.value;
-                          final district = districts.firstWhere(
+                          final district = widget.districts.firstWhere(
                             (d) => d.id == road.districtId,
-                            orElse: () => districts.first,
+                            orElse: () => widget.districts.first,
                           );
                           return CupertinoListTile(
                             leading: Container(

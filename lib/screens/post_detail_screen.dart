@@ -111,6 +111,84 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     }
   }
 
+  Future<void> _reportInaccurate() async {
+    if (_currentPost == null) return;
+
+    // Check if already reported
+    if (_currentPost!.reportedBy.contains(_currentUserId)) {
+      showCupertinoDialog(
+        context: context,
+        builder: (context) => CupertinoAlertDialog(
+          title: const Text('Already Reported'),
+          content: const Text('You have already reported this post as inaccurate.'),
+          actions: [
+            CupertinoDialogAction(
+              child: const Text('OK'),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    // Confirm report
+    final confirmed = await showCupertinoDialog<bool>(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: const Text('Report Inaccurate'),
+        content: const Text('Are you sure this post contains inaccurate information?'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.pop(context, false),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            child: const Text('Report'),
+            onPressed: () => Navigator.pop(context, true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        await _firebaseService.reportInaccurate(_currentPost!.id, _currentUserId);
+        if (!mounted) return;
+        
+        showCupertinoDialog(
+          context: context,
+          builder: (context) => CupertinoAlertDialog(
+            title: const Text('Reported'),
+            content: const Text('Thank you for reporting. This helps improve the accuracy of road condition information.'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      } catch (e) {
+        if (!mounted) return;
+        showCupertinoDialog(
+          context: context,
+          builder: (context) => CupertinoAlertDialog(
+            title: const Text('Error'),
+            content: Text('Failed to report: $e'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(
@@ -257,8 +335,128 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                   ),
                                 ],
                               ),
+                              const Spacer(),
+                              // Report Inaccurate Button
+                              CupertinoButton(
+                                padding: EdgeInsets.zero,
+                                minSize: 0,
+                                onPressed: _reportInaccurate,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      CupertinoIcons.exclamationmark_triangle,
+                                      size: 18,
+                                      color: CupertinoColors.systemOrange,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      'Report',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: (_currentPost?.reportedBy.contains(_currentUserId) ?? false)
+                                            ? CupertinoColors.systemRed
+                                            : CupertinoColors.systemOrange,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
                             ],
                           ),
+                              ),
+                            ],
+                          ),
+                          // Show inaccuracy reports count if any
+                          if ((_currentPost?.inaccuracyReports ?? widget.post.inaccuracyReports) > 0) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: CupertinoColors.systemOrange.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    CupertinoIcons.info,
+                                    size: 16,
+                                    color: CupertinoColors.systemOrange,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '${_currentPost?.inaccuracyReports ?? widget.post.inaccuracyReports} user(s) reported this as inaccurate',
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      color: CupertinoColors.systemOrange,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                          // Show auto-tags if available
+                          if ((_currentPost?.autoTags ?? widget.post.autoTags).isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: (_currentPost?.autoTags ?? widget.post.autoTags).map((tag) {
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: CupertinoColors.systemBlue.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    tag,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: CupertinoColors.systemBlue,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                          // Show risk level if available
+                          if ((_currentPost?.riskLevel ?? widget.post.riskLevel) != null) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Color((_currentPost?.riskLevel ?? widget.post.riskLevel)!.colorValue)
+                                    .withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: Color((_currentPost?.riskLevel ?? widget.post.riskLevel)!.colorValue)
+                                      .withValues(alpha: 0.3),
+                                  width: 1,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: BoxDecoration(
+                                      color: Color((_currentPost?.riskLevel ?? widget.post.riskLevel)!.colorValue),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Risk Level: ${(_currentPost?.riskLevel ?? widget.post.riskLevel)!.displayName}',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color((_currentPost?.riskLevel ?? widget.post.riskLevel)!.colorValue),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 20),
                           // Content
                           Text(

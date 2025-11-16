@@ -1,6 +1,39 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'post_category.dart';
 
+enum RiskLevel {
+  low,
+  medium,
+  high,
+  critical;
+
+  String get displayName {
+    switch (this) {
+      case RiskLevel.low:
+        return 'Low';
+      case RiskLevel.medium:
+        return 'Medium';
+      case RiskLevel.high:
+        return 'High';
+      case RiskLevel.critical:
+        return 'Critical';
+    }
+  }
+
+  int get colorValue {
+    switch (this) {
+      case RiskLevel.low:
+        return 0xFF34C759; // Green
+      case RiskLevel.medium:
+        return 0xFFFFCC00; // Yellow
+      case RiskLevel.high:
+        return 0xFFFF9500; // Orange
+      case RiskLevel.critical:
+        return 0xFFFF3B30; // Red
+    }
+  }
+}
+
 class Post {
   final String id;
   final String districtId;
@@ -17,6 +50,11 @@ class Post {
   final List<String> likedBy;
   final double? latitude;
   final double? longitude;
+  final List<String> autoTags; // AI-generated tags from NLP analysis
+  final RiskLevel? riskLevel; // AI-determined risk level
+  final int inaccuracyReports; // Count of users reporting this post as inaccurate
+  final List<String> reportedBy; // User IDs who reported this as inaccurate
+  final bool? isRoadDamage; // Detected via accelerometer
 
   Post({
     required this.id,
@@ -34,6 +72,11 @@ class Post {
     this.likedBy = const [],
     this.latitude,
     this.longitude,
+    this.autoTags = const [],
+    this.riskLevel,
+    this.inaccuracyReports = 0,
+    this.reportedBy = const [],
+    this.isRoadDamage,
   });
 
   Map<String, dynamic> toMap() {
@@ -53,10 +96,23 @@ class Post {
       'likedBy': likedBy,
       'latitude': latitude,
       'longitude': longitude,
+      'autoTags': autoTags,
+      'riskLevel': riskLevel?.name,
+      'inaccuracyReports': inaccuracyReports,
+      'reportedBy': reportedBy,
+      'isRoadDamage': isRoadDamage,
     };
   }
 
   factory Post.fromMap(Map<String, dynamic> map) {
+    RiskLevel? riskLevel;
+    if (map['riskLevel'] != null) {
+      riskLevel = RiskLevel.values.firstWhere(
+        (e) => e.name == map['riskLevel'],
+        orElse: () => RiskLevel.low,
+      );
+    }
+
     return Post(
       id: map['id'] ?? '',
       districtId: map['districtId'] ?? '',
@@ -73,6 +129,11 @@ class Post {
       likedBy: List<String>.from(map['likedBy'] ?? []),
       latitude: map['latitude']?.toDouble(),
       longitude: map['longitude']?.toDouble(),
+      autoTags: List<String>.from(map['autoTags'] ?? []),
+      riskLevel: riskLevel,
+      inaccuracyReports: map['inaccuracyReports'] ?? 0,
+      reportedBy: List<String>.from(map['reportedBy'] ?? []),
+      isRoadDamage: map['isRoadDamage'],
     );
   }
 
@@ -92,6 +153,11 @@ class Post {
     List<String>? likedBy,
     double? latitude,
     double? longitude,
+    List<String>? autoTags,
+    RiskLevel? riskLevel,
+    int? inaccuracyReports,
+    List<String>? reportedBy,
+    bool? isRoadDamage,
   }) {
     return Post(
       id: id ?? this.id,
@@ -109,6 +175,11 @@ class Post {
       likedBy: likedBy ?? this.likedBy,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      autoTags: autoTags ?? this.autoTags,
+      riskLevel: riskLevel ?? this.riskLevel,
+      inaccuracyReports: inaccuracyReports ?? this.inaccuracyReports,
+      reportedBy: reportedBy ?? this.reportedBy,
+      isRoadDamage: isRoadDamage ?? this.isRoadDamage,
     );
   }
 }

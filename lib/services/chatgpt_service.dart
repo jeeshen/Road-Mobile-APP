@@ -195,4 +195,113 @@ class ChatGPTService {
     buffer.writeln('\nStay alert and drive safely.');
     return buffer.toString();
   }
+
+  /// Generate AI content for road damage auto-report
+  Future<Map<String, String>> generateRoadDamageReport(
+    String districtName,
+    String state,
+    double severity,
+    double? latitude,
+    double? longitude,
+  ) async {
+    try {
+      final prompt = _buildRoadDamagePrompt(
+        districtName,
+        state,
+        severity,
+        latitude,
+        longitude,
+      );
+
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $apiKey',
+        },
+        body: jsonEncode({
+          'model': 'gpt-3.5-turbo',
+          'messages': [
+            {
+              'role': 'system',
+              'content':
+                  'You are a traffic safety assistant for Malaysia. Generate concise, professional road damage reports based on sensor data.',
+            },
+            {'role': 'user', 'content': prompt},
+          ],
+          'max_tokens': 200,
+          'temperature': 0.7,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final content = data['choices'][0]['message']['content'].trim();
+        
+        // Extract title and content from AI response
+        final lines = content.split('\n');
+        String title = 'Road Damage Detected';
+        String reportContent = content;
+        
+        // Try to extract title if first line looks like a title
+        if (lines.isNotEmpty && lines[0].length < 60 && !lines[0].contains('.')) {
+          title = lines[0].replaceAll('#', '').trim();
+          if (lines.length > 1) {
+            reportContent = lines.sublist(1).join('\n').trim();
+          }
+        }
+        
+        return {
+          'title': title,
+          'content': reportContent,
+        };
+      } else {
+        print('ChatGPT API error: ${response.statusCode} - ${response.body}');
+        return _generateFallbackRoadDamageReport(districtName, severity);
+      }
+    } catch (e) {
+      print('Error calling ChatGPT API: $e');
+      return _generateFallbackRoadDamageReport(districtName, severity);
+    }
+  }
+
+  String _buildRoadDamagePrompt(
+    String districtName,
+    String state,
+    double severity,
+    double? latitude,
+    double? longitude,
+  ) {
+    final buffer = StringBuffer();
+    buffer.writeln(
+      'Generate a road damage report for ${districtName}, ${state}, Malaysia.',
+    );
+    buffer.writeln('\nDetection details:');
+    buffer.writeln('• Severity: ${(severity * 100).toStringAsFixed(0)}%');
+    if (latitude != null && longitude != null) {
+      buffer.writeln(
+        '• Location: ${latitude.toStringAsFixed(6)}, ${longitude.toStringAsFixed(6)}',
+      );
+    }
+    buffer.writeln(
+      '\nGenerate a brief, professional report (2-3 sentences) describing the detected road damage. Include the location and severity level. Format: First line as title (short, no period), then content.',
+    );
+    return buffer.toString();
+  }
+
+  Map<String, String> _generateFallbackRoadDamageReport(
+    String districtName,
+    double severity,
+  ) {
+    final severityText = severity > 0.7
+        ? 'severe'
+        : severity > 0.4
+            ? 'moderate'
+            : 'minor';
+    return {
+      'title': 'Road Damage Detected',
+      'content':
+          'Road damage detected in $districtName. Severity level: ${(severity * 100).toStringAsFixed(0)}% ($severityText). Please drive with caution in this area.',
+    };
+  }
 }
