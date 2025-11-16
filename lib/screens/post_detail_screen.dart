@@ -20,6 +20,52 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   final FirebaseService _firebaseService = FirebaseService();
   final TextEditingController _commentController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
+  final String _currentUserId = 'demo_user'; // TODO: Replace with actual user ID
+  Post? _currentPost;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentPost = widget.post;
+    _loadPostUpdates();
+  }
+
+  void _loadPostUpdates() {
+    _firebaseService.getPostsStream(widget.post.districtId).listen((posts) {
+      final updatedPost = posts.firstWhere(
+        (p) => p.id == widget.post.id,
+        orElse: () => widget.post,
+      );
+      if (mounted) {
+        setState(() {
+          _currentPost = updatedPost;
+        });
+      }
+    });
+  }
+
+  Future<void> _toggleLike() async {
+    if (_currentPost == null) return;
+
+    try {
+      await _firebaseService.toggleLike(_currentPost!.id, _currentUserId);
+    } catch (e) {
+      if (!mounted) return;
+      showCupertinoDialog(
+        context: context,
+        builder: (context) => CupertinoAlertDialog(
+          title: const Text('Error'),
+          content: Text('Failed to update like: $e'),
+          actions: [
+            CupertinoDialogAction(
+              child: const Text('OK'),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -154,6 +200,62 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                   fontSize: 15,
                                   color: CupertinoColors.secondaryLabel,
                                 ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 20),
+                          // Like and Comment Actions
+                          Row(
+                            children: [
+                              CupertinoButton(
+                                padding: EdgeInsets.zero,
+                                minSize: 0,
+                                onPressed: _toggleLike,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      (_currentPost?.likedBy.contains(_currentUserId) ?? false)
+                                          ? CupertinoIcons.heart_fill
+                                          : CupertinoIcons.heart,
+                                      color: (_currentPost?.likedBy.contains(_currentUserId) ?? false)
+                                          ? CupertinoColors.systemRed
+                                          : CupertinoColors.secondaryLabel,
+                                      size: 20,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      '${_currentPost?.likeCount ?? widget.post.likeCount}',
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        color: (_currentPost?.likedBy.contains(_currentUserId) ?? false)
+                                            ? CupertinoColors.systemRed
+                                            : CupertinoColors.secondaryLabel,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 20),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    CupertinoIcons.chat_bubble,
+                                    size: 20,
+                                    color: CupertinoColors.secondaryLabel,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    '${_currentPost?.commentCount ?? widget.post.commentCount}',
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      color: CupertinoColors.secondaryLabel,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),

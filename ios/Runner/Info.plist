@@ -51,5 +51,9 @@
 	<string>This app needs photo library access to select images for posts</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>This app needs access to save photos</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app needs location access to show nearby traffic incidents and automatically switch to your current district forum</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>This app needs location access to show nearby traffic incidents and automatically switch to your current district forum</string>
 </dict>
 </plist>

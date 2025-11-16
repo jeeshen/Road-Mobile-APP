@@ -128,6 +128,34 @@ class FirebaseService {
     });
   }
 
+  Future<void> toggleLike(String postId, String userId) async {
+    try {
+      final postDoc = await _firestore.collection('posts').doc(postId).get();
+      if (!postDoc.exists) return;
+
+      final postData = postDoc.data()!;
+      final likedBy = List<String>.from(postData['likedBy'] ?? []);
+      final isLiked = likedBy.contains(userId);
+
+      if (isLiked) {
+        likedBy.remove(userId);
+        await _firestore.collection('posts').doc(postId).update({
+          'likedBy': likedBy,
+          'likeCount': FieldValue.increment(-1),
+        });
+      } else {
+        likedBy.add(userId);
+        await _firestore.collection('posts').doc(postId).update({
+          'likedBy': likedBy,
+          'likeCount': FieldValue.increment(1),
+        });
+      }
+    } catch (e) {
+      print('Error toggling like: $e');
+      rethrow;
+    }
+  }
+
   // Comments Collection
   Stream<List<Comment>> getCommentsStream(String postId) {
     print('Getting comments stream for post: $postId');

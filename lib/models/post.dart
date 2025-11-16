@@ -14,6 +14,7 @@ class Post {
   final bool isPinned;
   final int commentCount;
   final int likeCount;
+  final List<String> likedBy;
   final double? latitude;
   final double? longitude;
 
@@ -30,6 +31,7 @@ class Post {
     this.isPinned = false,
     this.commentCount = 0,
     this.likeCount = 0,
+    this.likedBy = const [],
     this.latitude,
     this.longitude,
   });
@@ -48,6 +50,7 @@ class Post {
       'isPinned': isPinned,
       'commentCount': commentCount,
       'likeCount': likeCount,
+      'likedBy': likedBy,
       'latitude': latitude,
       'longitude': longitude,
     };
@@ -67,6 +70,7 @@ class Post {
       isPinned: map['isPinned'] ?? false,
       commentCount: map['commentCount'] ?? 0,
       likeCount: map['likeCount'] ?? 0,
+      likedBy: List<String>.from(map['likedBy'] ?? []),
       latitude: map['latitude']?.toDouble(),
       longitude: map['longitude']?.toDouble(),
     );
@@ -85,6 +89,7 @@ class Post {
     bool? isPinned,
     int? commentCount,
     int? likeCount,
+    List<String>? likedBy,
     double? latitude,
     double? longitude,
   }) {
@@ -101,6 +106,7 @@ class Post {
       isPinned: isPinned ?? this.isPinned,
       commentCount: commentCount ?? this.commentCount,
       likeCount: likeCount ?? this.likeCount,
+      likedBy: likedBy ?? this.likedBy,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
     );

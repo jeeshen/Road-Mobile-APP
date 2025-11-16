@@ -302,11 +302,25 @@ class _PostCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 16),
                     const Icon(
+                      CupertinoIcons.heart,
+                      size: 16,
+                      color: CupertinoColors.secondaryLabel,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${post.likeCount}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: CupertinoColors.secondaryLabel,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    const Icon(
                       CupertinoIcons.chat_bubble,
                       size: 16,
                       color: CupertinoColors.secondaryLabel,
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 4),
                     Text(
                       '${post.commentCount}',
                       style: const TextStyle(

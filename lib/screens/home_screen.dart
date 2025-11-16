@@ -2,10 +2,13 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:geolocator/geolocator.dart';
 import '../models/district.dart';
 import '../models/post.dart';
 import '../models/post_category.dart';
 import '../services/firebase_service.dart';
+import '../services/location_service.dart';
+import '../services/chatgpt_service.dart';
 import 'forum_screen.dart';
 import 'debug_screen.dart';
 import 'post_detail_screen.dart';
@@ -20,25 +23,133 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final FirebaseService _firebaseService = FirebaseService();
+  final LocationService _locationService = LocationService();
+  final ChatGPTService? _chatGPTService = ChatGPTService(
+    apiKey:
+        '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',
+  );
   List<District> _districts = [];
   List<Post> _allPosts = [];
   bool _isLoading = true;
   StreamSubscription<List<Post>>? _postsSubscription;
+  StreamSubscription<Position>? _positionSubscription;
   Map<String, District>? _districtMap;
   List<Marker>? _cachedPostMarkers;
   List<Marker>? _cachedDistrictMarkers;
+  District? _currentDistrict;
+  String? _districtSummary;
+  bool _isLoadingSummary = false;
 
   @override
   void initState() {
     super.initState();
     _loadDistricts();
     _loadAllPosts();
+    _startLocationTracking();
   }
 
   @override
   void dispose() {
     _postsSubscription?.cancel();
+    _positionSubscription?.cancel();
     super.dispose();
+  }
+
+  void _startLocationTracking() async {
+    final hasPermission = await _locationService.checkPermission();
+    if (!hasPermission) {
+      return;
+    }
+
+    _positionSubscription = _locationService.getPositionStream().listen(
+      (position) {
+        if (_districts.isEmpty) return;
+
+        final nearestDistrict = _locationService.findNearestDistrict(
+          position,
+          _districts,
+        );
+
+        if (nearestDistrict != null &&
+            (_currentDistrict == null ||
+                nearestDistrict.id != _currentDistrict!.id)) {
+          setState(() {
+            _currentDistrict = nearestDistrict;
+            _districtSummary = null;
+          });
+          _showDistrictAlert(nearestDistrict);
+          _loadDistrictSummary(nearestDistrict);
+        }
+      },
+      onError: (error) {
+        print('Location stream error: $error');
+      },
+    );
+  }
+
+  void _showDistrictAlert(District district) {
+    showCupertinoDialog(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: const Text('Entering New Area'),
+        content: Text('You are now in ${district.name}, ${district.state}'),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('OK'),
+            onPressed: () => Navigator.pop(context),
+          ),
+          CupertinoDialogAction(
+            isDefaultAction: true,
+            child: const Text('View Forum'),
+            onPressed: () {
+              Navigator.pop(context);
+              _navigateToForum(district);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Generates AI traffic summary for a district using ChatGPT
+  ///
+  /// Triggered automatically when:
+  /// - User enters a new district (detected via location tracking)
+  ///
+  /// Can also be triggered manually via refresh button in the UI
+  Future<void> _loadDistrictSummary(District district) async {
+    // ChatGPT service is optional - skip if not configured
+    if (_chatGPTService == null) return;
+
+    setState(() {
+      _isLoadingSummary = true;
+    });
+
+    try {
+      final districtPosts = _allPosts
+          .where((post) => post.districtId == district.id)
+          .take(20)
+          .toList();
+
+      final summary = await _chatGPTService!.generateTrafficSummary(
+        district,
+        districtPosts,
+      );
+
+      if (mounted) {
+        setState(() {
+          _districtSummary = summary;
+          _isLoadingSummary = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading summary: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingSummary = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadDistricts() async {
@@ -495,15 +606,113 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ),
                                 // Title
-                                const Padding(
-                                  padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
-                                  child: Text(
-                                    'Regional Forums',
-                                    style: TextStyle(
-                                      fontSize: 28,
-                                      fontWeight: FontWeight.bold,
-                                      letterSpacing: -0.5,
-                                    ),
+                                Padding(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    16,
+                                    8,
+                                    16,
+                                    16,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Regional Forums',
+                                        style: TextStyle(
+                                          fontSize: 28,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: -0.5,
+                                        ),
+                                      ),
+                                      // Current District Summary
+                                      if (_currentDistrict != null) ...[
+                                        const SizedBox(height: 12),
+                                        Container(
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: CupertinoColors.systemBlue
+                                                .withValues(alpha: 0.1),
+                                            borderRadius: BorderRadius.circular(
+                                              10,
+                                            ),
+                                            border: Border.all(
+                                              color: CupertinoColors.systemBlue
+                                                  .withValues(alpha: 0.3),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  const Icon(
+                                                    CupertinoIcons
+                                                        .location_fill,
+                                                    size: 16,
+                                                    color: CupertinoColors
+                                                        .systemBlue,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Expanded(
+                                                    child: Text(
+                                                      'Current: ${_currentDistrict!.name}',
+                                                      style: const TextStyle(
+                                                        fontSize: 15,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                        color: CupertinoColors
+                                                            .systemBlue,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  if (_chatGPTService != null)
+                                                    CupertinoButton(
+                                                      padding: EdgeInsets.zero,
+                                                      minSize: 0,
+                                                      onPressed:
+                                                          _currentDistrict !=
+                                                              null
+                                                          ? () => _loadDistrictSummary(
+                                                              _currentDistrict!,
+                                                            )
+                                                          : null,
+                                                      child: Icon(
+                                                        CupertinoIcons
+                                                            .arrow_clockwise,
+                                                        size: 16,
+                                                        color: _isLoadingSummary
+                                                            ? CupertinoColors
+                                                                  .tertiaryLabel
+                                                            : CupertinoColors
+                                                                  .systemBlue,
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                              if (_isLoadingSummary) ...[
+                                                const SizedBox(height: 8),
+                                                const CupertinoActivityIndicator(),
+                                              ] else if (_districtSummary !=
+                                                  null) ...[
+                                                const SizedBox(height: 8),
+                                                Text(
+                                                  _districtSummary!,
+                                                  style: const TextStyle(
+                                                    fontSize: 13,
+                                                    color:
+                                                        CupertinoColors.label,
+                                                    height: 1.4,
+                                                  ),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                 ),
                               ],
