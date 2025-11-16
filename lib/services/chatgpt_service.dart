@@ -3,10 +3,12 @@ import 'package:http/http.dart' as http;
 import '../models/post.dart';
 import '../models/district.dart';
 import '../models/post_category.dart';
+import 'analytics_service.dart';
 
 class ChatGPTService {
   final String apiKey;
   final String baseUrl = 'https://api.openai.com/v1/chat/completions';
+  final AnalyticsService _analyticsService = AnalyticsService();
 
   ChatGPTService({required this.apiKey});
 
@@ -107,6 +109,90 @@ class ChatGPTService {
 
     buffer.writeln('\nStay alert and drive safely.');
 
+    return buffer.toString();
+  }
+
+  Future<String> generateTodayTrafficSummary(List<Post> allPosts) async {
+    final todayData = _analyticsService.getTodayTrafficData(allPosts);
+
+    if (todayData.totalPosts == 0) {
+      return 'No traffic incidents reported today. Roads are clear!';
+    }
+
+    try {
+      final prompt = _buildTodayPrompt(todayData);
+
+      final response = await http.post(
+        Uri.parse(baseUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $apiKey',
+        },
+        body: jsonEncode({
+          'model': 'gpt-3.5-turbo',
+          'messages': [
+            {
+              'role': 'system',
+              'content':
+                  'You are a traffic safety assistant for Malaysia. Provide concise, helpful daily traffic summaries with risk assessment.',
+            },
+            {'role': 'user', 'content': prompt},
+          ],
+          'max_tokens': 400,
+          'temperature': 0.7,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['choices'][0]['message']['content'].trim();
+      } else {
+        print('ChatGPT API error: ${response.statusCode} - ${response.body}');
+        return _generateFallbackTodaySummary(todayData);
+      }
+    } catch (e) {
+      print('Error calling ChatGPT API: $e');
+      return _generateFallbackTodaySummary(todayData);
+    }
+  }
+
+  String _buildTodayPrompt(TodayTrafficData data) {
+    final buffer = StringBuffer();
+    buffer.writeln(
+      'Generate a comprehensive traffic summary for today in Malaysia.',
+    );
+    buffer.writeln('\nToday\'s incidents:');
+    buffer.writeln('• Total reports: ${data.totalPosts}');
+    buffer.writeln('• Accidents: ${data.accidents}');
+    buffer.writeln('• Traffic jams: ${data.trafficJams}');
+    buffer.writeln('• Roadblocks: ${data.roadblocks}');
+    buffer.writeln('• Road closures: ${data.roadClosures}');
+    buffer.writeln('• Risk level: ${data.riskLevel.displayName}');
+
+    if (data.posts.isNotEmpty) {
+      buffer.writeln('\nRecent incidents:');
+      for (var post in data.posts.take(5)) {
+        buffer.writeln('- ${post.category.displayName}: ${post.title}');
+      }
+    }
+
+    buffer.writeln(
+      '\nProvide a 3-4 sentence summary highlighting today\'s traffic conditions, key areas of concern, and safety recommendations. Include the risk level assessment.',
+    );
+
+    return buffer.toString();
+  }
+
+  String _generateFallbackTodaySummary(TodayTrafficData data) {
+    final buffer = StringBuffer();
+    buffer.writeln('Today\'s Traffic Summary:');
+    buffer.writeln('• Total reports: ${data.totalPosts}');
+    buffer.writeln('• Accidents: ${data.accidents}');
+    buffer.writeln('• Traffic jams: ${data.trafficJams}');
+    buffer.writeln('• Roadblocks: ${data.roadblocks}');
+    buffer.writeln('• Road closures: ${data.roadClosures}');
+    buffer.writeln('\nRisk Level: ${data.riskLevel.displayName}');
+    buffer.writeln('\nStay alert and drive safely.');
     return buffer.toString();
   }
 }

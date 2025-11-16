@@ -9,10 +9,12 @@ import '../models/post_category.dart';
 import '../services/firebase_service.dart';
 import '../services/location_service.dart';
 import '../services/chatgpt_service.dart';
+import '../services/analytics_service.dart';
 import 'forum_screen.dart';
 import 'debug_screen.dart';
 import 'post_detail_screen.dart';
 import 'create_post_screen.dart';
+import 'historical_data_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -24,6 +26,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final FirebaseService _firebaseService = FirebaseService();
   final LocationService _locationService = LocationService();
+  final AnalyticsService _analyticsService = AnalyticsService();
   final ChatGPTService? _chatGPTService = ChatGPTService(
     apiKey:
         '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',
@@ -36,9 +39,15 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, District>? _districtMap;
   List<Marker>? _cachedPostMarkers;
   List<Marker>? _cachedDistrictMarkers;
+  List<Marker>? _cachedEmergencyMarkers;
+  List<CircleMarker>? _cachedHeatmapCircles;
   District? _currentDistrict;
   String? _districtSummary;
   bool _isLoadingSummary = false;
+  String? _todaySummary;
+  bool _isLoadingTodaySummary = false;
+  bool _showHeatmap = false;
+  bool _showEmergencies = true;
 
   @override
   void initState() {
@@ -131,7 +140,7 @@ class _HomeScreenState extends State<HomeScreen> {
           .take(20)
           .toList();
 
-      final summary = await _chatGPTService!.generateTrafficSummary(
+      final summary = await _chatGPTService.generateTrafficSummary(
         district,
         districtPosts,
       );
@@ -180,9 +189,39 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {
           _allPosts = posts;
           _cachedPostMarkers = null; // Invalidate cache
+          _cachedEmergencyMarkers = null;
+          _cachedHeatmapCircles = null;
         });
+        _loadTodaySummary();
       }
     });
+  }
+
+  Future<void> _loadTodaySummary() async {
+    if (_chatGPTService == null) return;
+
+    setState(() {
+      _isLoadingTodaySummary = true;
+    });
+
+    try {
+      final summary = await _chatGPTService.generateTodayTrafficSummary(
+        _allPosts,
+      );
+      if (mounted) {
+        setState(() {
+          _todaySummary = summary;
+          _isLoadingTodaySummary = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading today summary: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingTodaySummary = false;
+        });
+      }
+    }
   }
 
   List<Marker> _buildPostMarkers() {
@@ -244,15 +283,19 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<Marker> _buildDistrictMarkers() {
-    if (_cachedDistrictMarkers != null) {
+    if (_cachedDistrictMarkers != null && _districtMap != null) {
       return _cachedDistrictMarkers!;
     }
 
+    final postCounts = _analyticsService.getPostCountsByDistrict(_allPosts);
+
     _cachedDistrictMarkers = _districts.map((district) {
+      final postCount = postCounts[district.id] ?? 0;
+
       return Marker(
         point: LatLng(district.latitude, district.longitude),
         width: 70,
-        height: 90,
+        height: 100,
         alignment: Alignment.topCenter,
         child: GestureDetector(
           onTap: () => _navigateToForum(district),
@@ -261,31 +304,69 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // iOS-style pin head
-                Container(
-                  width: 32,
-                  height: 32,
-                  decoration: BoxDecoration(
-                    color: CupertinoColors.systemRed,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: CupertinoColors.white,
-                      width: 2.5,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: CupertinoColors.black.withValues(alpha: 0.3),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                        spreadRadius: 0,
+                // iOS-style pin head with post count badge
+                Stack(
+                  alignment: Alignment.topRight,
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: CupertinoColors.systemRed,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: CupertinoColors.white,
+                          width: 2.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: CupertinoColors.black.withValues(alpha: 0.3),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                            spreadRadius: 0,
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  child: const Icon(
-                    CupertinoIcons.location_fill,
-                    color: CupertinoColors.white,
-                    size: 16,
-                  ),
+                      child: const Icon(
+                        CupertinoIcons.location_fill,
+                        color: CupertinoColors.white,
+                        size: 16,
+                      ),
+                    ),
+                    // Post count badge
+                    if (postCount > 0)
+                      Positioned(
+                        right: -4,
+                        top: -4,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: CupertinoColors.systemOrange,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: CupertinoColors.white,
+                              width: 1.5,
+                            ),
+                          ),
+                          constraints: const BoxConstraints(
+                            minWidth: 16,
+                            minHeight: 16,
+                          ),
+                          child: Text(
+                            postCount > 99 ? '99+' : postCount.toString(),
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: CupertinoColors.white,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 // iOS-style pin tail
                 Container(
@@ -347,6 +428,98 @@ class _HomeScreenState extends State<HomeScreen> {
     }).toList();
 
     return _cachedDistrictMarkers!;
+  }
+
+  List<Marker> _buildEmergencyMarkers() {
+    if (!_showEmergencies) return [];
+    if (_cachedEmergencyMarkers != null) {
+      return _cachedEmergencyMarkers!;
+    }
+
+    final emergencies = _analyticsService.getCurrentEmergencies(_allPosts);
+
+    _cachedEmergencyMarkers = emergencies
+        .map((post) {
+          double lat;
+          double lon;
+
+          if (post.latitude != null && post.longitude != null) {
+            lat = post.latitude!;
+            lon = post.longitude!;
+          } else {
+            final district = _districtMap?[post.districtId];
+            if (district == null) return null;
+            lat = district.latitude;
+            lon = district.longitude;
+          }
+
+          return Marker(
+            point: LatLng(lat, lon),
+            width: 40,
+            height: 40,
+            child: GestureDetector(
+              onTap: () => _navigateToPostDetail(post),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: CupertinoColors.systemRed,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: CupertinoColors.white, width: 3),
+                  boxShadow: [
+                    BoxShadow(
+                      color: CupertinoColors.systemRed.withValues(alpha: 0.6),
+                      blurRadius: 12,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  CupertinoIcons.exclamationmark_triangle_fill,
+                  color: CupertinoColors.white,
+                  size: 20,
+                ),
+              ),
+            ),
+          );
+        })
+        .whereType<Marker>()
+        .toList();
+
+    return _cachedEmergencyMarkers!;
+  }
+
+  List<CircleMarker> _buildHeatmapCircles() {
+    if (!_showHeatmap) return [];
+    if (_cachedHeatmapCircles != null) {
+      return _cachedHeatmapCircles!;
+    }
+
+    final heatmapData = _analyticsService.calculateHeatmapData(_allPosts);
+    if (heatmapData.isEmpty) return [];
+
+    final maxValue = heatmapData.values.reduce((a, b) => a > b ? a : b);
+    if (maxValue == 0) return [];
+
+    _cachedHeatmapCircles = heatmapData.entries
+        .map((entry) {
+          final district = _districtMap?[entry.key];
+          if (district == null) return null;
+
+          final intensity = (entry.value / maxValue).clamp(0.0, 1.0);
+          final radius = 5000 + (intensity * 15000); // 5km to 20km radius
+
+          return CircleMarker(
+            point: LatLng(district.latitude, district.longitude),
+            radius: radius,
+            color: CupertinoColors.systemOrange.withValues(
+              alpha: 0.2 * intensity,
+            ),
+            useRadiusInMeter: true,
+          );
+        })
+        .whereType<CircleMarker>()
+        .toList();
+
+    return _cachedHeatmapCircles!;
   }
 
   void _navigateToForum(District district) {
@@ -445,6 +618,20 @@ class _HomeScreenState extends State<HomeScreen> {
       navigationBar: CupertinoNavigationBar(
         middle: const Text('Traffic Safety Malaysia'),
         backgroundColor: CupertinoColors.systemBackground,
+        leading: CupertinoButton(
+          padding: EdgeInsets.zero,
+          child: const Icon(CupertinoIcons.chart_bar_square),
+          onPressed: () {
+            Navigator.of(context).push(
+              CupertinoPageRoute(
+                builder: (context) => HistoricalDataScreen(
+                  posts: _allPosts,
+                  districts: _districts,
+                ),
+              ),
+            );
+          },
+        ),
         trailing: CupertinoButton(
           padding: EdgeInsets.zero,
           child: const Icon(CupertinoIcons.info_circle),
@@ -481,9 +668,14 @@ class _HomeScreenState extends State<HomeScreen> {
                       subdomains: const ['a', 'b', 'c', 'd'],
                       userAgentPackageName: 'com.roadmobile.app',
                     ),
+                    // Heatmap layer
+                    if (_showHeatmap)
+                      CircleLayer(circles: _buildHeatmapCircles()),
                     // Post markers (incidents)
                     if (_allPosts.isNotEmpty)
                       MarkerLayer(markers: _buildPostMarkers()),
+                    // Emergency markers
+                    MarkerLayer(markers: _buildEmergencyMarkers()),
                     // District markers (forums)
                     MarkerLayer(markers: _buildDistrictMarkers()),
                   ],
@@ -552,6 +744,69 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 10),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: CupertinoColors.systemRed,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: CupertinoColors.white,
+                                  width: 1,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Emergencies',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        CupertinoButton(
+                          padding: EdgeInsets.zero,
+                          minSize: 0,
+                          onPressed: () {
+                            setState(() {
+                              _showHeatmap = !_showHeatmap;
+                              _cachedHeatmapCircles = null;
+                            });
+                          },
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: _showHeatmap
+                                      ? CupertinoColors.systemOrange
+                                      : CupertinoColors.tertiaryLabel,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Heatmap',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                  color: _showHeatmap
+                                      ? CupertinoColors.label
+                                      : CupertinoColors.tertiaryLabel,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                         const SizedBox(height: 6),
                         Text(
                           '${_allPosts.length} active',
@@ -561,6 +816,136 @@ class _HomeScreenState extends State<HomeScreen> {
                             fontWeight: FontWeight.w400,
                           ),
                         ),
+                      ],
+                    ),
+                  ),
+                ),
+                // Today's Traffic Summary Panel
+                Positioned(
+                  top: 16,
+                  left: 16,
+                  right: 200,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: CupertinoColors.systemBackground,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: CupertinoColors.black.withValues(alpha: 0.08),
+                          blurRadius: 10,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              CupertinoIcons.chart_bar_alt_fill,
+                              size: 16,
+                              color: CupertinoColors.systemBlue,
+                            ),
+                            const SizedBox(width: 6),
+                            const Text(
+                              'Today\'s Summary',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const Spacer(),
+                            if (_chatGPTService != null)
+                              CupertinoButton(
+                                padding: EdgeInsets.zero,
+                                minSize: 0,
+                                onPressed: _loadTodaySummary,
+                                child: Icon(
+                                  CupertinoIcons.arrow_clockwise,
+                                  size: 14,
+                                  color: _isLoadingTodaySummary
+                                      ? CupertinoColors.tertiaryLabel
+                                      : CupertinoColors.systemBlue,
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        if (_isLoadingTodaySummary)
+                          const CupertinoActivityIndicator()
+                        else if (_todaySummary != null) ...[
+                          Text(
+                            _todaySummary!,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: CupertinoColors.label,
+                              height: 1.4,
+                            ),
+                            maxLines: 4,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 6),
+                          Builder(
+                            builder: (context) {
+                              final todayData = _analyticsService
+                                  .getTodayTrafficData(_allPosts);
+                              return Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Color(
+                                    todayData.riskLevel.colorValue,
+                                  ).withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: Color(
+                                      todayData.riskLevel.colorValue,
+                                    ).withValues(alpha: 0.3),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 6,
+                                      height: 6,
+                                      decoration: BoxDecoration(
+                                        color: Color(
+                                          todayData.riskLevel.colorValue,
+                                        ),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'Risk: ${todayData.riskLevel.displayName}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(
+                                          todayData.riskLevel.colorValue,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ] else
+                          const Text(
+                            'Loading summary...',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: CupertinoColors.secondaryLabel,
+                            ),
+                          ),
                       ],
                     ),
                   ),
