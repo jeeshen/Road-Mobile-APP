@@ -68,6 +68,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(
+      backgroundColor: CupertinoColors.systemGroupedBackground,
       navigationBar: const CupertinoNavigationBar(
         middle: Text('Post Details'),
       ),
@@ -87,24 +88,24 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                           // Category Badge
                           Container(
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
+                                horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
-                              color: widget.post.category.color.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(8),
+                              color: widget.post.category.color.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(6),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Icon(
                                   widget.post.category.icon,
-                                  size: 16,
+                                  size: 14,
                                   color: widget.post.category.color,
                                 ),
                                 const SizedBox(width: 6),
                                 Text(
                                   widget.post.category.displayName,
                                   style: TextStyle(
-                                    fontSize: 13,
+                                    fontSize: 12,
                                     color: widget.post.category.color,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -117,8 +118,10 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                           Text(
                             widget.post.title,
                             style: const TextStyle(
-                              fontSize: 24,
+                              fontSize: 28,
                               fontWeight: FontWeight.bold,
+                              letterSpacing: -0.5,
+                              height: 1.2,
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -128,41 +131,45 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                               const Icon(
                                 CupertinoIcons.person_circle,
                                 size: 16,
-                                color: CupertinoColors.systemGrey,
+                                color: CupertinoColors.secondaryLabel,
                               ),
                               const SizedBox(width: 6),
                               Text(
                                 widget.post.username,
                                 style: const TextStyle(
-                                  fontSize: 13,
-                                  color: CupertinoColors.systemGrey,
+                                  fontSize: 15,
+                                  color: CupertinoColors.secondaryLabel,
                                 ),
                               ),
                               const SizedBox(width: 16),
                               const Icon(
                                 CupertinoIcons.time,
                                 size: 16,
-                                color: CupertinoColors.systemGrey,
+                                color: CupertinoColors.secondaryLabel,
                               ),
                               const SizedBox(width: 6),
                               Text(
                                 timeago.format(widget.post.createdAt),
                                 style: const TextStyle(
-                                  fontSize: 13,
-                                  color: CupertinoColors.systemGrey,
+                                  fontSize: 15,
+                                  color: CupertinoColors.secondaryLabel,
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 20),
                           // Content
                           Text(
                             widget.post.content,
-                            style: const TextStyle(fontSize: 16, height: 1.5),
+                            style: const TextStyle(
+                              fontSize: 17,
+                              height: 1.4,
+                              letterSpacing: -0.2,
+                            ),
                           ),
                           // Media
                           if (widget.post.mediaUrls.isNotEmpty) ...[
-                            const SizedBox(height: 16),
+                            const SizedBox(height: 20),
                             ...widget.post.mediaUrls.map((url) {
                               return Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
@@ -185,29 +192,16 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                             }),
                           ],
                           const SizedBox(height: 24),
-                          Container(
-                            height: 0.5,
-                            color: CupertinoColors.separator,
-                          ),
-                          const SizedBox(height: 16),
                           // Comments Header
-                          Row(
-                            children: [
-                              const Icon(
-                                CupertinoIcons.chat_bubble_2,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Comments (${widget.post.commentCount})',
-                                style: const TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
+                          Text(
+                            'Comments',
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: -0.3,
+                            ),
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 8),
                         ],
                       ),
                     ),
@@ -218,80 +212,116 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) {
                         return const SliverToBoxAdapter(
-                          child: Center(child: CupertinoActivityIndicator()),
+                          child: Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Center(child: CupertinoActivityIndicator()),
+                          ),
                         );
                       }
 
                       final comments = snapshot.data!;
                       if (comments.isEmpty) {
-                        return const SliverToBoxAdapter(
-                          child: Padding(
-                            padding: EdgeInsets.all(32),
+                        return SliverToBoxAdapter(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            padding: const EdgeInsets.all(32),
+                            decoration: BoxDecoration(
+                              color: CupertinoColors.systemBackground,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
                             child: Center(
-                              child: Text(
-                                'No comments yet',
-                                style: TextStyle(
-                                  color: CupertinoColors.systemGrey,
-                                ),
+                              child: Column(
+                                children: [
+                                  Icon(
+                                    CupertinoIcons.chat_bubble_2,
+                                    size: 48,
+                                    color: CupertinoColors.tertiaryLabel,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    'No comments yet',
+                                    style: TextStyle(
+                                      fontSize: 17,
+                                      color: CupertinoColors.secondaryLabel,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
                         );
                       }
 
-                      return SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            final comment = comments[index];
-                            return Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 12),
-                              decoration: const BoxDecoration(
-                                border: Border(
-                                  bottom: BorderSide(
-                                    color: CupertinoColors.separator,
-                                    width: 0.5,
-                                  ),
+                      return SliverPadding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        sliver: SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) {
+                              final comment = comments[index];
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: CupertinoColors.systemBackground,
+                                  borderRadius: BorderRadius.circular(10),
                                 ),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        CupertinoIcons.person_circle_fill,
-                                        size: 20,
-                                        color: CupertinoColors.systemGrey,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        comment.username,
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 14,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Container(
+                                          width: 32,
+                                          height: 32,
+                                          decoration: BoxDecoration(
+                                            color: CupertinoColors.systemGrey6,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            CupertinoIcons.person_fill,
+                                            size: 18,
+                                            color: CupertinoColors.secondaryLabel,
+                                          ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        timeago.format(comment.createdAt),
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: CupertinoColors.systemGrey,
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                comment.username,
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  fontSize: 15,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                timeago.format(comment.createdAt),
+                                                style: const TextStyle(
+                                                  fontSize: 13,
+                                                  color: CupertinoColors.secondaryLabel,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 10),
+                                    Text(
+                                      comment.content,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        height: 1.4,
                                       ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    comment.content,
-                                    style: const TextStyle(fontSize: 14),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                          childCount: comments.length,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                            childCount: comments.length,
+                          ),
                         ),
                       );
                     },
@@ -301,55 +331,77 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
             ),
             // Comment Input
             Container(
-              padding: const EdgeInsets.all(8),
-              decoration: const BoxDecoration(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
                 color: CupertinoColors.systemBackground,
                 border: Border(
                   top: BorderSide(
-                    color: CupertinoColors.separator,
+                    color: CupertinoColors.separator.withValues(alpha: 0.3),
                     width: 0.5,
                   ),
                 ),
               ),
-              child: Column(
-                children: [
-                  CupertinoTextField(
-                    controller: _usernameController,
-                    placeholder: 'Username (Optional)',
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: CupertinoColors.systemGrey6,
-                      borderRadius: BorderRadius.circular(8),
+              child: SafeArea(
+                top: false,
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: CupertinoColors.systemGrey6,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: CupertinoTextField(
+                        controller: _usernameController,
+                        placeholder: 'Username (Optional)',
+                        padding: const EdgeInsets.all(8),
+                        decoration: null,
+                        style: const TextStyle(fontSize: 15),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: CupertinoTextField(
-                          controller: _commentController,
-                          placeholder: 'Add a comment...',
-                          padding: const EdgeInsets.all(12),
-                          maxLines: null,
-                          decoration: BoxDecoration(
-                            color: CupertinoColors.systemGrey6,
-                            borderRadius: BorderRadius.circular(20),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: CupertinoColors.systemGrey6,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: CupertinoTextField(
+                              controller: _commentController,
+                              placeholder: 'Add a comment...',
+                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+                              maxLines: null,
+                              decoration: null,
+                              style: const TextStyle(fontSize: 15),
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      CupertinoButton(
-                        padding: EdgeInsets.zero,
-                        onPressed: _addComment,
-                        child: const Icon(
-                          CupertinoIcons.arrow_up_circle_fill,
-                          size: 32,
-                          color: CupertinoColors.activeBlue,
+                        const SizedBox(width: 10),
+                        CupertinoButton(
+                          padding: EdgeInsets.zero,
+                          minSize: 0,
+                          onPressed: _addComment,
+                          child: Container(
+                            width: 36,
+                            height: 36,
+                            decoration: const BoxDecoration(
+                              color: CupertinoColors.systemBlue,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              CupertinoIcons.arrow_up,
+                              size: 18,
+                              color: CupertinoColors.white,
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
+                      ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ],

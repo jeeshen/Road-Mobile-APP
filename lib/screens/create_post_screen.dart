@@ -221,6 +221,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   @override
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(
+      backgroundColor: CupertinoColors.systemGroupedBackground,
       navigationBar: CupertinoNavigationBar(
         middle: const Text('Create Post'),
         leading: CupertinoButton(
@@ -237,140 +238,205 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
         ),
       ),
       child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            // Username
-            CupertinoTextField(
-              controller: _usernameController,
-              placeholder: 'Username (Optional)',
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                border: Border.all(color: CupertinoColors.separator),
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            const SizedBox(height: 16),
-            // Category Selector
-            GestureDetector(
-              onTap: _showCategoryPicker,
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  border: Border.all(color: CupertinoColors.separator),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(_selectedCategory.icon,
-                        color: _selectedCategory.color, size: 20),
-                    const SizedBox(width: 8),
-                    Text(_selectedCategory.displayName),
-                    const Spacer(),
-                    const Icon(
-                      CupertinoIcons.chevron_down,
-                      size: 18,
-                      color: CupertinoColors.systemGrey,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            // Title
-            CupertinoTextField(
-              controller: _titleController,
-              placeholder: 'Post Title',
-              padding: const EdgeInsets.all(12),
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-              decoration: BoxDecoration(
-                border: Border.all(color: CupertinoColors.separator),
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            const SizedBox(height: 16),
-            // Content
-            CupertinoTextField(
-              controller: _contentController,
-              placeholder: 'Describe the situation...',
-              padding: const EdgeInsets.all(12),
-              maxLines: 8,
-              decoration: BoxDecoration(
-                border: Border.all(color: CupertinoColors.separator),
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-            const SizedBox(height: 16),
-            // Media Section
-            Row(
-              children: [
-                CupertinoButton(
-                  padding: EdgeInsets.zero,
-                  onPressed: _pickImage,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 8),
+        child: CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              sliver: SliverList(
+                delegate: SliverChildListDelegate([
+                  // Username Section
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                     decoration: BoxDecoration(
-                      color: CupertinoColors.systemBlue,
-                      borderRadius: BorderRadius.circular(8),
+                      color: CupertinoColors.systemBackground,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Row(
-                      children: [
-                        Icon(CupertinoIcons.photo, color: CupertinoColors.white),
-                        SizedBox(width: 8),
-                        Text(
-                          'Add Photos',
-                          style: TextStyle(color: CupertinoColors.white),
-                        ),
-                      ],
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: CupertinoTextField(
+                        controller: _usernameController,
+                        placeholder: 'Username (Optional)',
+                        padding: const EdgeInsets.all(16),
+                        decoration: null,
+                        style: const TextStyle(fontSize: 17),
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            if (_selectedMedia.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: _selectedMedia.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final file = entry.value;
-                  return Stack(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.file(
-                          file,
-                          width: 100,
-                          height: 100,
-                          fit: BoxFit.cover,
-                        ),
-                      ),
-                      Positioned(
-                        top: 4,
-                        right: 4,
-                        child: GestureDetector(
-                          onTap: () => _removeMedia(index),
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: const BoxDecoration(
-                              color: CupertinoColors.systemRed,
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              CupertinoIcons.xmark,
-                              size: 16,
-                              color: CupertinoColors.white,
-                            ),
+                  // Category Selector
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: CupertinoColors.systemBackground,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: GestureDetector(
+                        onTap: _showCategoryPicker,
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _selectedCategory.icon,
+                                color: _selectedCategory.color,
+                                size: 22,
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                _selectedCategory.displayName,
+                                style: const TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w400,
+                                ),
+                              ),
+                              const Spacer(),
+                              const Icon(
+                                CupertinoIcons.chevron_right,
+                                size: 16,
+                                color: CupertinoColors.tertiaryLabel,
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                    ],
-                  );
-                }).toList(),
+                    ),
+                  ),
+                  // Title
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: CupertinoColors.systemBackground,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: CupertinoTextField(
+                        controller: _titleController,
+                        placeholder: 'Post Title',
+                        padding: const EdgeInsets.all(16),
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        decoration: null,
+                      ),
+                    ),
+                  ),
+                  // Content
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: CupertinoColors.systemBackground,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: CupertinoTextField(
+                        controller: _contentController,
+                        placeholder: 'Describe the situation...',
+                        padding: const EdgeInsets.all(16),
+                        maxLines: 8,
+                        minLines: 6,
+                        decoration: null,
+                        style: const TextStyle(fontSize: 17),
+                      ),
+                    ),
+                  ),
+                  // Media Section
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: CupertinoColors.systemBackground,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CupertinoButton(
+                              padding: EdgeInsets.zero,
+                              onPressed: _pickImage,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: CupertinoColors.systemBlue.withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: const Icon(
+                                      CupertinoIcons.photo,
+                                      color: CupertinoColors.systemBlue,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Text(
+                                    'Add Photos',
+                                    style: TextStyle(
+                                      fontSize: 17,
+                                      color: CupertinoColors.systemBlue,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (_selectedMedia.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 12,
+                                runSpacing: 12,
+                                children: _selectedMedia.asMap().entries.map((entry) {
+                                  final index = entry.key;
+                                  final file = entry.value;
+                                  return Stack(
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: Image.file(
+                                          file,
+                                          width: 100,
+                                          height: 100,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
+                                      Positioned(
+                                        top: 6,
+                                        right: 6,
+                                        child: GestureDetector(
+                                          onTap: () => _removeMedia(index),
+                                          child: Container(
+                                            padding: const EdgeInsets.all(6),
+                                            decoration: const BoxDecoration(
+                                              color: CupertinoColors.systemRed,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(
+                                              CupertinoIcons.xmark,
+                                              size: 14,
+                                              color: CupertinoColors.white,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }).toList(),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ]),
               ),
-            ],
+            ),
           ],
         ),
       ),

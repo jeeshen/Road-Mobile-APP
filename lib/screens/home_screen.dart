@@ -319,14 +319,15 @@ class _HomeScreenState extends State<HomeScreen> {
                         top: 16,
                         right: 16,
                         child: Container(
-                          padding: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: CupertinoColors.white,
+                            color: CupertinoColors.systemBackground,
                             borderRadius: BorderRadius.circular(12),
                             boxShadow: [
                               BoxShadow(
-                                color: CupertinoColors.black.withValues(alpha: 0.1),
-                                blurRadius: 8,
+                                color: CupertinoColors.black.withValues(alpha: 0.08),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
                               ),
                             ],
                           ),
@@ -334,51 +335,56 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    CupertinoIcons.location_solid,
-                                    size: 14,
-                                    color: CupertinoColors.systemRed,
-                                  ),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'Districts',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Container(
-                                    width: 12,
-                                    height: 12,
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      color: CupertinoColors.systemRed,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'Districts',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
                                     decoration: const BoxDecoration(
                                       color: CupertinoColors.systemOrange,
                                       shape: BoxShape.circle,
                                     ),
                                   ),
-                                  const SizedBox(width: 6),
+                                  const SizedBox(width: 8),
                                   const Text(
                                     'Posts',
                                     style: TextStyle(
-                                      fontSize: 10,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 4),
+                              const SizedBox(height: 6),
                               Text(
                                 '${_allPosts.length} active',
                                 style: const TextStyle(
-                                  fontSize: 9,
-                                  color: CupertinoColors.systemGrey,
+                                  fontSize: 11,
+                                  color: CupertinoColors.secondaryLabel,
+                                  fontWeight: FontWeight.w400,
                                 ),
                               ),
                             ],
@@ -393,46 +399,78 @@ class _HomeScreenState extends State<HomeScreen> {
                   flex: 1,
                   child: Container(
                     decoration: const BoxDecoration(
-                      color: CupertinoColors.systemBackground,
-                      border: Border(
-                        top: BorderSide(
-                          color: CupertinoColors.separator,
-                          width: 0.5,
-                        ),
-                      ),
+                      color: CupertinoColors.systemGroupedBackground,
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Padding(
-                          padding: EdgeInsets.all(16.0),
+                          padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
                           child: Text(
                             'Regional Forums',
                             style: TextStyle(
-                              fontSize: 20,
+                              fontSize: 28,
                               fontWeight: FontWeight.bold,
+                              letterSpacing: -0.5,
                             ),
                           ),
                         ),
                         Expanded(
-                          child: ListView.builder(
-                            itemCount: _districts.length,
-                            itemBuilder: (context, index) {
-                              final district = _districts[index];
-                              return CupertinoListTile(
-                                leading: const Icon(
-                                  CupertinoIcons.map_pin_ellipse,
-                                  color: CupertinoColors.systemRed,
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 16),
+                            decoration: BoxDecoration(
+                              color: CupertinoColors.systemBackground,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: ListView.separated(
+                                itemCount: _districts.length,
+                                separatorBuilder: (context, index) => Container(
+                                  height: 0.5,
+                                  margin: const EdgeInsets.only(left: 56),
+                                  color: CupertinoColors.separator,
                                 ),
-                                title: Text(district.name),
-                                subtitle: Text(district.state),
-                                trailing: const Icon(
-                                  CupertinoIcons.right_chevron,
-                                  size: 18,
-                                ),
-                                onTap: () => _navigateToForum(district),
-                              );
-                            },
+                                itemBuilder: (context, index) {
+                                  final district = _districts[index];
+                                  return CupertinoListTile(
+                                    leading: Container(
+                                      width: 32,
+                                      height: 32,
+                                      decoration: BoxDecoration(
+                                        color: CupertinoColors.systemRed.withValues(alpha: 0.1),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: const Icon(
+                                        CupertinoIcons.map_pin_ellipse,
+                                        color: CupertinoColors.systemRed,
+                                        size: 18,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      district.name,
+                                      style: const TextStyle(
+                                        fontSize: 17,
+                                        fontWeight: FontWeight.w400,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      district.state,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        color: CupertinoColors.secondaryLabel,
+                                      ),
+                                    ),
+                                    trailing: const Icon(
+                                      CupertinoIcons.chevron_right,
+                                      size: 16,
+                                      color: CupertinoColors.tertiaryLabel,
+                                    ),
+                                    onTap: () => _navigateToForum(district),
+                                  );
+                                },
+                              ),
+                            ),
                           ),
                         ),
                       ],

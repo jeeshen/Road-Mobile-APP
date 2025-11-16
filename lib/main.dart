@@ -19,6 +19,7 @@ class MyApp extends StatelessWidget {
       theme: CupertinoThemeData(
         brightness: Brightness.light,
         primaryColor: CupertinoColors.systemBlue,
+        scaffoldBackgroundColor: CupertinoColors.systemGroupedBackground,
       ),
       home: HomeScreen(),
       debugShowCheckedModeBanner: false,
