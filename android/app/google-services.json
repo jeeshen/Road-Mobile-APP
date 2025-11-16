@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1057173770504",
+    "project_id": "roadmobile-81d37",
+    "storage_bucket": "roadmobile-81d37.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1057173770504:android:ece9c4f4e1997717bbdcbd",
+        "android_client_info": {
+          "package_name": "com.roadmobile.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA-km9aL5LOyKNxsUfHXCplkMFAjC_Wbpw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
