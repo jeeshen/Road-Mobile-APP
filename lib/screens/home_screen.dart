@@ -661,12 +661,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                   ),
                   children: [
-                    TileLayer(
-                      // Using CartoDB for better styling
-                      urlTemplate:
-                          'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-                      subdomains: const ['a', 'b', 'c', 'd'],
-                      userAgentPackageName: 'com.roadmobile.app',
+                    Builder(
+                      builder: (context) {
+                        final devicePixelRatio = MediaQuery.of(context).devicePixelRatio;
+                        return TileLayer(
+                          // Using CartoDB for better styling
+                          urlTemplate:
+                              'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+                          subdomains: const ['a', 'b', 'c', 'd'],
+                          userAgentPackageName: 'com.roadmobile.app',
+                          retinaMode: devicePixelRatio > 1.0,
+                        );
+                      },
                     ),
                     // Heatmap layer
                     if (_showHeatmap)
