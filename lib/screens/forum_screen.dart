@@ -24,9 +24,7 @@ class ForumScreen extends StatelessWidget {
 
   void _navigateToPostDetail(BuildContext context, Post post) {
     Navigator.of(context).push(
-      CupertinoPageRoute(
-        builder: (context) => PostDetailScreen(post: post),
-      ),
+      CupertinoPageRoute(builder: (context) => PostDetailScreen(post: post)),
     );
   }
 
@@ -48,7 +46,7 @@ class ForumScreen extends StatelessWidget {
           print('Stream state: ${snapshot.connectionState}');
           print('Has data: ${snapshot.hasData}');
           print('Has error: ${snapshot.hasError}');
-          
+
           if (snapshot.hasError) {
             print('Stream error: ${snapshot.error}');
             return Center(
@@ -84,7 +82,7 @@ class ForumScreen extends StatelessWidget {
               ),
             );
           }
-          
+
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CupertinoActivityIndicator());
           }
@@ -93,10 +91,10 @@ class ForumScreen extends StatelessWidget {
             print('No data in snapshot');
             return const Center(child: CupertinoActivityIndicator());
           }
-          
+
           final posts = snapshot.data!;
           print('Posts loaded: ${posts.length}');
-          
+
           if (posts.isEmpty) {
             return Center(
               child: Column(
@@ -135,18 +133,18 @@ class ForumScreen extends StatelessWidget {
 
           return CustomScrollView(
             slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                sliver: SliverList(
-                  delegate: SliverChildBuilderDelegate(
-                    (context, index) {
+              SliverSafeArea(
+                bottom: false,
+                sliver: SliverPadding(
+                  padding: const EdgeInsets.only(top: 8, bottom: 8),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate((context, index) {
                       final post = posts[index];
                       return _PostCard(
                         post: post,
                         onTap: () => _navigateToPostDetail(context, post),
                       );
-                    },
-                    childCount: posts.length,
+                    }, childCount: posts.length),
                   ),
                 ),
               ),
@@ -194,7 +192,10 @@ class _PostCard extends StatelessWidget {
                         ),
                       ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: post.category.color.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(6),
@@ -323,4 +324,3 @@ class _PostCard extends StatelessWidget {
     );
   }
 }
-

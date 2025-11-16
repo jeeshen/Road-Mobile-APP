@@ -130,13 +130,37 @@ class FirebaseService {
 
   // Comments Collection
   Stream<List<Comment>> getCommentsStream(String postId) {
+    print('Getting comments stream for post: $postId');
+    
     return _firestore
         .collection('comments')
         .where('postId', isEqualTo: postId)
-        .orderBy('createdAt', descending: false)
         .snapshots()
-        .map((snapshot) =>
-            snapshot.docs.map((doc) => Comment.fromMap(doc.data())).toList());
+        .map((snapshot) {
+          print('Comments snapshot received: ${snapshot.docs.length} documents');
+          
+          if (snapshot.docs.isEmpty) {
+            print('No comments found for post: $postId');
+            return <Comment>[];
+          }
+          
+          final comments = <Comment>[];
+          for (var doc in snapshot.docs) {
+            try {
+              print('Processing comment document: ${doc.id}');
+              final comment = Comment.fromMap(doc.data());
+              comments.add(comment);
+            } catch (e) {
+              print('Error parsing comment ${doc.id}: $e');
+            }
+          }
+          
+          // Sort by createdAt in memory (oldest first)
+          comments.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          
+          print('Returning ${comments.length} parsed comments');
+          return comments;
+        });
   }
 
   Future<void> createComment(Comment comment) async {

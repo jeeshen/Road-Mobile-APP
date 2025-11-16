@@ -210,6 +210,57 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                   StreamBuilder<List<Comment>>(
                     stream: _firebaseService.getCommentsStream(widget.post.id),
                     builder: (context, snapshot) {
+                      if (snapshot.hasError) {
+                        print('Comments stream error: ${snapshot.error}');
+                        return SliverToBoxAdapter(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            padding: const EdgeInsets.all(32),
+                            decoration: BoxDecoration(
+                              color: CupertinoColors.systemBackground,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Center(
+                              child: Column(
+                                children: [
+                                  const Icon(
+                                    CupertinoIcons.exclamationmark_triangle,
+                                    size: 48,
+                                    color: CupertinoColors.systemRed,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    'Error loading comments',
+                                    style: TextStyle(
+                                      fontSize: 17,
+                                      color: CupertinoColors.secondaryLabel,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '${snapshot.error}',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: CupertinoColors.tertiaryLabel,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const SliverToBoxAdapter(
+                          child: Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Center(child: CupertinoActivityIndicator()),
+                          ),
+                        );
+                      }
+
                       if (!snapshot.hasData) {
                         return const SliverToBoxAdapter(
                           child: Padding(
