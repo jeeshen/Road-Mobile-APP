@@ -589,7 +589,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 6),
                 // District name label
                 Container(
-                  constraints: const BoxConstraints(maxWidth: 65),
+                  constraints: const BoxConstraints(maxWidth: 120),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 6,
                     vertical: 3,
