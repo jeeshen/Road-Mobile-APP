@@ -1,15 +1,14 @@
 import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:uuid/uuid.dart';
 import '../models/post.dart';
 import '../models/comment.dart';
 import '../models/district.dart';
+import '../models/user.dart';
 import 'image_upload_service.dart';
 
 class FirebaseService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final ImageUploadService _imageUploadService = ImageUploadService();
-  final Uuid _uuid = const Uuid();
 
   // Districts Collection
   Future<List<District>> getDistricts() async {
@@ -175,6 +174,16 @@ class FirebaseService {
       }
     } catch (e) {
       print('Error reporting inaccurate: $e');
+      rethrow;
+    }
+  }
+
+  // User Updates
+  Future<void> updateUser(User user) async {
+    try {
+      await _firestore.collection('users').doc(user.id).update(user.toMap());
+    } catch (e) {
+      print('Error updating user: $e');
       rethrow;
     }
   }

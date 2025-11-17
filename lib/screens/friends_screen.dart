@@ -5,8 +5,6 @@ import '../models/user.dart';
 import '../services/friend_service.dart';
 import 'add_friend_screen.dart';
 
-enum FriendSortMode { name, id }
-
 class FriendsScreen extends StatefulWidget {
   final User currentUser;
   final VoidCallback? onLogout;
@@ -20,7 +18,6 @@ class FriendsScreen extends StatefulWidget {
 class _FriendsScreenState extends State<FriendsScreen> {
   final FriendService _friendService = FriendService();
   String _searchQuery = '';
-  FriendSortMode _sortMode = FriendSortMode.name;
   final ScrollController _scrollController = ScrollController();
 
   @override
@@ -81,17 +78,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
       final id = (friend['friendId'] ?? '').toString().toLowerCase();
       return name.contains(query) || id.contains(query);
     }).toList();
-
-    filtered.sort((a, b) {
-      final nameA = (a['friendName'] ?? '').toString();
-      final nameB = (b['friendName'] ?? '').toString();
-      final idA = (a['friendId'] ?? '').toString();
-      final idB = (b['friendId'] ?? '').toString();
-      if (_sortMode == FriendSortMode.id) {
-        return idA.compareTo(idB);
-      }
-      return nameA.compareTo(nameB);
-    });
     return filtered;
   }
 
@@ -439,22 +425,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
                         setState(() {
                           _searchQuery = value;
                         });
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    CupertinoSlidingSegmentedControl<FriendSortMode>(
-                      groupValue: _sortMode,
-                      padding: const EdgeInsets.all(4),
-                      children: const {
-                        FriendSortMode.name: Text('Sort by Name'),
-                        FriendSortMode.id: Text('Sort by ID'),
-                      },
-                      onValueChanged: (mode) {
-                        if (mode != null) {
-                          setState(() {
-                            _sortMode = mode;
-                          });
-                        }
                       },
                     ),
                   ],

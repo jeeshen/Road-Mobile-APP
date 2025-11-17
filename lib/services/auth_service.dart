@@ -1,31 +1,28 @@
+import 'dart:math';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:uuid/uuid.dart';
+
 import '../models/user.dart';
 
 class AuthService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final Uuid _uuid = const Uuid();
+  final Random _random = Random();
 
   // Register a new user with name and password
   Future<User?> register(String name, String password) async {
     try {
-      // Check if name already exists
-      final existingUser = await _firestore
-          .collection('users')
-          .where('name', isEqualTo: name)
-          .limit(1)
-          .get();
+      final trimmedName = name.trim();
+      final trimmedPassword = password.trim();
+      final normalizedName = trimmedName.toLowerCase();
 
-      if (existingUser.docs.isNotEmpty) {
-        throw Exception('Name already taken');
-      }
+      await _ensureNameIsAvailable(trimmedName, normalizedName);
 
-      // Generate auto user ID
-      final userId = _uuid.v4();
+      // Generate short 6-digit user ID
+      final userId = await _generateUniqueUserId();
       final user = User(
         id: userId,
-        name: name,
-        password: password,
+        name: trimmedName,
+        password: trimmedPassword,
         createdAt: DateTime.now(),
       );
 
@@ -42,22 +39,23 @@ class AuthService {
   // Login with name and password
   Future<User?> login(String name, String password) async {
     try {
-      final snapshot = await _firestore
-          .collection('users')
-          .where('name', isEqualTo: name)
-          .limit(1)
-          .get();
+      final trimmedName = name.trim();
+      final normalizedName = trimmedName.toLowerCase();
+      final trimmedPassword = password.trim();
 
-      if (snapshot.docs.isEmpty) {
+      final userDoc = await _findUserDocByName(normalizedName);
+      if (userDoc == null) {
         throw Exception('User not found');
       }
 
-      final userData = snapshot.docs.first.data();
+      final userData = userDoc.data();
       final user = User.fromMap(userData);
 
-      if (user.password != password) {
+      if (user.password != trimmedPassword) {
         throw Exception('Invalid password');
       }
+
+      await _ensureNormalizedField(userDoc, normalizedName);
 
       return user;
     } catch (e) {
@@ -94,5 +92,93 @@ class AuthService {
       return null;
     }
   }
-}
 
+  // Update user information
+  Future<void> updateUser(User user) async {
+    try {
+      await _firestore.collection('users').doc(user.id).update(user.toMap());
+    } catch (e) {
+      print('Error updating user: $e');
+      rethrow;
+    }
+  }
+
+  Future<String> _generateUniqueUserId() async {
+    while (true) {
+      final candidate = (_random.nextInt(900000) + 100000).toString();
+      final existingDoc = await _firestore
+          .collection('users')
+          .doc(candidate)
+          .get();
+      if (!existingDoc.exists) {
+        return candidate;
+      }
+    }
+  }
+
+  Future<void> _ensureNameIsAvailable(
+    String displayName,
+    String normalizedName,
+  ) async {
+    final normalizedSnapshot = await _firestore
+        .collection('users')
+        .where('nameLower', isEqualTo: normalizedName)
+        .limit(1)
+        .get();
+
+    if (normalizedSnapshot.docs.isNotEmpty) {
+      throw Exception('Name already taken');
+    }
+
+    final exactSnapshot = await _firestore
+        .collection('users')
+        .where('name', isEqualTo: displayName)
+        .limit(1)
+        .get();
+
+    final hasLegacyMatch = exactSnapshot.docs.any((doc) {
+      final docName = (doc.data()['name'] as String?)?.toLowerCase();
+      return docName == normalizedName;
+    });
+
+    if (hasLegacyMatch) {
+      throw Exception('Name already taken');
+    }
+  }
+
+  Future<QueryDocumentSnapshot<Map<String, dynamic>>?> _findUserDocByName(
+    String normalizedName,
+  ) async {
+    final snapshot = await _firestore
+        .collection('users')
+        .where('nameLower', isEqualTo: normalizedName)
+        .limit(1)
+        .get();
+
+    if (snapshot.docs.isNotEmpty) {
+      return snapshot.docs.first;
+    }
+
+    final fallbackSnapshot = await _firestore.collection('users').get();
+    for (final doc in fallbackSnapshot.docs) {
+      final docName = (doc.data()['name'] as String?)?.toLowerCase();
+      if (docName == normalizedName) {
+        return doc;
+      }
+    }
+
+    return null;
+  }
+
+  Future<void> _ensureNormalizedField(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+    String normalizedName,
+  ) async {
+    final currentValue = doc.data()['nameLower'] as String?;
+    if (currentValue == normalizedName) {
+      return;
+    }
+
+    await doc.reference.update({'nameLower': normalizedName});
+  }
+}

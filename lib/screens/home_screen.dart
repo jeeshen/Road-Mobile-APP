@@ -7,11 +7,17 @@ import '../models/district.dart';
 import '../models/post.dart';
 import '../models/post_category.dart';
 import '../models/user.dart';
+import '../models/user_location.dart';
+import '../models/character.dart';
 import '../services/firebase_service.dart';
+import '../services/auth_service.dart';
 import '../services/location_service.dart';
 import '../services/chatgpt_service.dart';
 import '../services/analytics_service.dart' hide RiskLevel;
 import '../services/road_damage_service.dart';
+import '../services/location_sharing_service.dart';
+import '../services/session_service.dart';
+import '../widgets/animated_character_marker.dart';
 import 'auth_screen.dart';
 import 'forum_screen.dart';
 import 'debug_screen.dart';
@@ -19,6 +25,7 @@ import 'post_detail_screen.dart';
 import 'create_post_screen.dart';
 import 'historical_data_screen.dart';
 import 'friends_screen.dart';
+import 'shop_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -28,26 +35,40 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const Duration _onlinePresenceThreshold = Duration(seconds: 45);
+  final List<Character> _allCharacters = Character.getAllCharacters();
+  late final Map<String, Character> _charactersById = {
+    for (final character in _allCharacters) character.id: character,
+  };
+  late final Character _fallbackCharacter = _allCharacters.first;
   final FirebaseService _firebaseService = FirebaseService();
+  final AuthService _authService = AuthService();
   final LocationService _locationService = LocationService();
   final AnalyticsService _analyticsService = AnalyticsService();
   final RoadDamageService _roadDamageService = RoadDamageService();
+  final LocationSharingService _locationSharingService =
+      LocationSharingService();
+  final SessionService _sessionService = SessionService();
   final ChatGPTService? _chatGPTService = ChatGPTService(
     apiKey:
         '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',
   );
   List<District> _districts = [];
   List<Post> _allPosts = [];
+  List<UserLocation> _userLocations = [];
+  List<Marker> _otherUserMarkers = const <Marker>[];
   User? _currentUser;
   bool _isLoading = true;
   StreamSubscription<List<Post>>? _postsSubscription;
   StreamSubscription<Position>? _positionSubscription;
+  StreamSubscription<List<UserLocation>>? _userLocationsSubscription;
   Map<String, District>? _districtMap;
   List<Marker>? _cachedPostMarkers;
   List<Marker>? _cachedEmergencyMarkers;
   List<Marker>? _cachedDangerPointMarkers; // AI-detected danger points
   List<CircleMarker>? _cachedHeatmapCircles;
   District? _currentDistrict;
+  String? _stateFilter;
   String? _districtSummary;
   bool _isLoadingSummary = false;
   bool _showHeatmap = false;
@@ -57,6 +78,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _gpsStatus = 'Checking...';
   double? _currentSpeed;
   Timer? _gpsUpdateTimer;
+  Timer? _locationShareTimer;
   Position? _currentUserPosition; // User's current GPS position
   final MapController _mapController =
       MapController(); // Map controller for centering
@@ -69,19 +91,25 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(_restoreSession());
     _loadDistricts();
     _loadAllPosts();
+    _loadUserLocations();
     _startLocationTracking();
     _startRoadDamageDetection();
     _startGPSStatusUpdates();
+    _locationSharingService.startCleanupTimer();
   }
 
   @override
   void dispose() {
     _postsSubscription?.cancel();
     _positionSubscription?.cancel();
+    _userLocationsSubscription?.cancel();
     _roadDamageService.stopMonitoring();
+    _locationSharingService.dispose();
     _gpsUpdateTimer?.cancel();
+    _locationShareTimer?.cancel();
     super.dispose();
   }
 
@@ -104,6 +132,38 @@ class _HomeScreenState extends State<HomeScreen> {
         _currentSpeed = status['currentSpeed'] as double?;
       });
     }
+  }
+
+  void _startLocationShareTimer() {
+    _locationShareTimer?.cancel();
+    _locationShareTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      unawaited(_sendLocationUpdate());
+    });
+    unawaited(_sendLocationUpdate());
+  }
+
+  void _stopLocationShareTimer() {
+    _locationShareTimer?.cancel();
+    _locationShareTimer = null;
+  }
+
+  Future<void> _sendLocationUpdate([Position? latestPosition]) async {
+    if (_currentUser == null || !_currentUser!.shareLocation) return;
+
+    Position? position = latestPosition ?? _currentUserPosition;
+    if (position == null) {
+      position = await _locationService.getCurrentPosition();
+      if (position == null) {
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _currentUserPosition = position;
+        });
+      }
+    }
+
+    await _locationSharingService.updateUserLocation(_currentUser!, position);
   }
 
   void _startRoadDamageDetection() {
@@ -188,6 +248,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   LatLng(position.latitude, position.longitude),
                   15.0,
                 );
+                unawaited(_syncStateFilterWithPosition(position));
+              }
+
+              // Share location if enabled
+              if (_currentUser != null && _currentUser!.shareLocation) {
+                unawaited(_sendLocationUpdate(position));
               }
             }
 
@@ -203,6 +269,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     nearestDistrict.id != _currentDistrict!.id)) {
               setState(() {
                 _currentDistrict = nearestDistrict;
+                _stateFilter = nearestDistrict.state;
                 _districtSummary = null;
               });
               _showDistrictAlert(nearestDistrict);
@@ -297,6 +364,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _isLoading = false;
       });
     }
+    await _syncStateFilterWithPosition();
   }
 
   void _loadAllPosts() {
@@ -312,6 +380,31 @@ class _HomeScreenState extends State<HomeScreen> {
         });
       }
     });
+  }
+
+  void _setLegendVisibility(bool visible) {
+    setState(() {
+      _showLegendBox = visible;
+      _legendBoxOffset = visible ? 0 : -350;
+    });
+  }
+
+  void _toggleLegendVisibility() {
+    _setLegendVisibility(!_showLegendBox);
+  }
+
+  void _loadUserLocations() {
+    // Listen to user locations for real-time updates
+    _userLocationsSubscription = _locationSharingService
+        .getUserLocationsStream()
+        .listen((locations) {
+          if (mounted) {
+            setState(() {
+              _userLocations = locations;
+              _otherUserMarkers = _createOtherUserMarkers(locations);
+            });
+          }
+        });
   }
 
   List<Marker> _buildPostMarkers() {
@@ -373,14 +466,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<Marker> _buildDistrictMarkers() {
-    // Filter districts based on current state if not showing all
-    List<District> districtsToShow = _districts;
-    if (!_showAllDistricts && _currentDistrict != null) {
-      districtsToShow = _districts
-          .where((d) => d.state == _currentDistrict!.state)
-          .toList();
-    }
-
+    final districtsToShow = _getVisibleDistricts();
     final postCounts = _analyticsService.getPostCountsByDistrict(_allPosts);
 
     return districtsToShow.map((district) {
@@ -636,10 +722,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _navigateToForum(District district) {
     Navigator.of(context).push(
       CupertinoPageRoute(
-        builder: (context) => ForumScreen(
-          district: district,
-          currentUser: _currentUser,
-        ),
+        builder: (context) =>
+            ForumScreen(district: district, currentUser: _currentUser),
       ),
     );
   }
@@ -647,10 +731,8 @@ class _HomeScreenState extends State<HomeScreen> {
   void _navigateToPostDetail(Post post) {
     Navigator.of(context).push(
       CupertinoPageRoute(
-        builder: (context) => PostDetailScreen(
-          post: post,
-          currentUser: _currentUser,
-        ),
+        builder: (context) =>
+            PostDetailScreen(post: post, currentUser: _currentUser),
       ),
     );
   }
@@ -664,7 +746,11 @@ class _HomeScreenState extends State<HomeScreen> {
               if (!mounted) return;
               setState(() {
                 _currentUser = user;
+                _otherUserMarkers = _createOtherUserMarkers(_userLocations);
               });
+              if (user.shareLocation) {
+                _startLocationShareTimer();
+              }
               Future.microtask(_openFriendsScreen);
             },
           ),
@@ -679,19 +765,131 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_currentUser == null) return;
     Navigator.of(context).push(
       CupertinoPageRoute(
-        builder: (context) => FriendsScreen(
-          currentUser: _currentUser!,
-          onLogout: _handleLogout,
-        ),
+        builder: (context) =>
+            FriendsScreen(currentUser: _currentUser!, onLogout: _handleLogout),
       ),
     );
   }
 
   void _handleLogout() {
     if (!mounted) return;
+    if (_currentUser != null) {
+      _stopLocationShareTimer();
+      unawaited(_locationSharingService.stopSharingLocation(_currentUser!.id));
+    }
+    unawaited(_sessionService.clear());
     setState(() {
       _currentUser = null;
+      _otherUserMarkers = _createOtherUserMarkers(_userLocations);
     });
+  }
+
+  Future<void> _restoreSession() async {
+    final savedUserId = await _sessionService.getSavedUserId();
+    if (savedUserId == null) return;
+
+    final savedUser = await _authService.getUserById(savedUserId);
+    if (!mounted) return;
+
+    if (savedUser == null) {
+      await _sessionService.clear();
+      return;
+    }
+
+    setState(() {
+      _currentUser = savedUser;
+      _otherUserMarkers = _createOtherUserMarkers(_userLocations);
+    });
+
+    if (savedUser.shareLocation) {
+      _startLocationShareTimer();
+    }
+  }
+
+  void _showLocationPermissionDialog() {
+    if (!mounted) return;
+    showCupertinoDialog(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: const Text('Location Permission Needed'),
+        content: const Text(
+          'Enable location access to share your live position with friends.',
+        ),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('OK'),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _toggleLocationSharing() async {
+    if (_currentUser == null) return;
+
+    final enableSharing = !_currentUser!.shareLocation;
+
+    if (enableSharing) {
+      final hasPermission = await _locationService.checkPermission();
+      if (!hasPermission) {
+        _showLocationPermissionDialog();
+        return;
+      }
+    }
+
+    final updatedUser = _currentUser!.copyWith(shareLocation: enableSharing);
+
+    try {
+      await _firebaseService.updateUser(updatedUser);
+
+      setState(() {
+        _currentUser = updatedUser;
+      });
+
+      if (enableSharing) {
+        _startLocationShareTimer();
+      } else {
+        _stopLocationShareTimer();
+        await _locationSharingService.stopSharingLocation(_currentUser!.id);
+      }
+
+      // No confirmation dialog to keep toggle non-intrusive
+    } catch (e) {
+      print('Error toggling location sharing: $e');
+    }
+  }
+
+  void _openShopScreen() {
+    if (_currentUser == null) {
+      _handleProfileButton();
+      return;
+    }
+
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (context) => ShopScreen(
+          currentUser: _currentUser!,
+          onCharacterSelected: (updatedUser) {
+            if (mounted) {
+              setState(() {
+                _currentUser = updatedUser;
+              });
+            }
+            if (_currentUserPosition != null &&
+                _currentUser != null &&
+                _currentUser!.shareLocation) {
+              unawaited(
+                _locationSharingService.updateUserLocation(
+                  _currentUser!,
+                  _currentUserPosition!,
+                ),
+              );
+            }
+          },
+        ),
+      ),
+    );
   }
 
   void _showCreatePostDialog(LatLng location) {
@@ -745,10 +943,45 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// Build user location marker
+  /// Build user location marker (current user - character or dot)
   List<Marker> _buildUserLocationMarker() {
     if (_currentUserPosition == null) return [];
 
+    // Show character if user has selected one and location sharing is enabled
+    if (_currentUser != null &&
+        _currentUser!.selectedCharacter != null &&
+        _currentUser!.shareLocation) {
+      // Find character by ID
+      final character = Character.getAllCharacters().firstWhere(
+        (c) => c.id == _currentUser!.selectedCharacter,
+        orElse: () => Character.getAllCharacters().first,
+      );
+
+      // Lancer needs bigger scale
+      final isLancer = character.name.toLowerCase() == 'lancer';
+      final scale = isLancer ? 1.4 : 1.0;
+
+      return [
+        Marker(
+          point: LatLng(
+            _currentUserPosition!.latitude,
+            _currentUserPosition!.longitude,
+          ),
+          width: 120,
+          height: 120,
+          alignment: Alignment.center,
+          child: AnimatedCharacterMarker(
+            key: ValueKey(_currentUser!.selectedCharacter),
+            actions: character.actions,
+            userName: _currentUser!.name,
+            enableClick: true,
+            scale: scale,
+          ),
+        ),
+      ];
+    }
+
+    // Fallback to blue dot
     return [
       Marker(
         point: LatLng(
@@ -810,6 +1043,101 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     ];
+  }
+
+  bool _isUserOnline(UserLocation location, DateTime now) {
+    return now.difference(location.lastUpdate) <= _onlinePresenceThreshold;
+  }
+
+  List<District> _getVisibleDistricts() {
+    if (_showAllDistricts) {
+      return _districts;
+    }
+    final fallbackState = _districts.isNotEmpty ? _districts.first.state : null;
+    final currentState =
+        _stateFilter ?? _currentDistrict?.state ?? fallbackState;
+    if (currentState == null) {
+      return _districts;
+    }
+    return _districts
+        .where((district) => district.state == currentState)
+        .toList();
+  }
+
+  Future<void> _syncStateFilterWithPosition([Position? position]) async {
+    Position? reference = position ?? _currentUserPosition;
+    if (reference == null) {
+      reference = await _locationService.getCurrentPosition();
+      if (reference == null) {
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _currentUserPosition = reference;
+        });
+      }
+    }
+
+    if (_districts.isEmpty) return;
+
+    final nearestDistrict = _locationService.findNearestDistrict(
+      reference,
+      _districts,
+    );
+    if (nearestDistrict == null) return;
+
+    final bool districtChanged =
+        _currentDistrict == null || nearestDistrict.id != _currentDistrict!.id;
+
+    if (!mounted) return;
+
+    setState(() {
+      _currentDistrict = nearestDistrict;
+      _stateFilter = nearestDistrict.state;
+      if (districtChanged) {
+        _districtSummary = null;
+      }
+    });
+
+    if (districtChanged) {
+      _loadDistrictSummary(nearestDistrict);
+    }
+  }
+
+  List<Marker> _createOtherUserMarkers(List<UserLocation> locations) {
+    final now = DateTime.now();
+    final currentUserId = _currentUser?.id;
+    return locations
+        .where(
+          (location) =>
+              location.userId != currentUserId && _isUserOnline(location, now),
+        )
+        .map((location) {
+          final character =
+              _charactersById[location.selectedCharacter] ?? _fallbackCharacter;
+          final isLancer = character.name.toLowerCase() == 'lancer';
+          final scale = isLancer ? 1.4 : 1.0;
+
+          return Marker(
+            point: LatLng(location.latitude, location.longitude),
+            width: 100,
+            height: 100,
+            alignment: Alignment.center,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: AnimatedCharacterMarker(
+                key: ValueKey(
+                  '${location.userId}_${location.selectedCharacter}',
+                ),
+                actions: character.actions,
+                userName: location.userName,
+                enableClick: false,
+                scale: scale,
+              ),
+            ),
+          );
+        })
+        .toList();
   }
 
   /// Build danger point markers based on AI analysis (high risk posts)
@@ -1007,9 +1335,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     // Heatmap layer
                     if (_showHeatmap)
                       CircleLayer(circles: _buildHeatmapCircles()),
-                    // User location marker (always on top)
-                    if (_currentUserPosition != null)
-                      MarkerLayer(markers: _buildUserLocationMarker()),
                     // Danger point markers (AI-detected high risk)
                     MarkerLayer(markers: _buildDangerPointMarkers()),
                     // Post markers (incidents)
@@ -1019,6 +1344,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     MarkerLayer(markers: _buildEmergencyMarkers()),
                     // District markers (forums)
                     MarkerLayer(markers: _buildDistrictMarkers()),
+                    // Other users markers with animated characters
+                    MarkerLayer(markers: _otherUserMarkers),
+                    // User location marker (always on top)
+                    if (_currentUserPosition != null)
+                      MarkerLayer(markers: _buildUserLocationMarker()),
                   ],
                 ),
                 // Map legend (slides to right to hide)
@@ -1037,14 +1367,13 @@ class _HomeScreenState extends State<HomeScreen> {
                         });
                       },
                       onHorizontalDragEnd: (details) {
-                        setState(() {
-                          if (_legendBoxOffset < -175) {
-                            _legendBoxOffset = -350;
-                            _showLegendBox = false;
-                          } else {
+                        if (_legendBoxOffset < -175) {
+                          _setLegendVisibility(false);
+                        } else {
+                          setState(() {
                             _legendBoxOffset = 0;
-                          }
-                        });
+                          });
+                        }
                       },
                       child: Container(
                         padding: const EdgeInsets.all(14),
@@ -1067,20 +1396,50 @@ class _HomeScreenState extends State<HomeScreen> {
                           children: [
                             // User Location
                             if (_currentUserPosition != null)
-                              Row(
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onTap: _toggleLegendVisibility,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: const BoxDecoration(
+                                        color: CupertinoColors.systemBlue,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Text(
+                                      'Your Location',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            if (_currentUserPosition != null)
+                              const SizedBox(height: 10),
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _toggleLegendVisibility,
+                              child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Container(
                                     width: 8,
                                     height: 8,
                                     decoration: const BoxDecoration(
-                                      color: CupertinoColors.systemBlue,
+                                      color: CupertinoColors.systemRed,
                                       shape: BoxShape.circle,
                                     ),
                                   ),
                                   const SizedBox(width: 8),
                                   const Text(
-                                    'Your Location',
+                                    'Districts',
                                     style: TextStyle(
                                       fontSize: 13,
                                       fontWeight: FontWeight.w500,
@@ -1088,76 +1447,62 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ],
                               ),
-                            if (_currentUserPosition != null)
-                              const SizedBox(height: 10),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: const BoxDecoration(
-                                    color: CupertinoColors.systemRed,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                const Text(
-                                  'Districts',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
                             ),
                             const SizedBox(height: 10),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: const BoxDecoration(
-                                    color: CupertinoColors.systemOrange,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                const Text(
-                                  'Posts',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                    color: CupertinoColors.systemRed,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: CupertinoColors.white,
-                                      width: 1,
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _toggleLegendVisibility,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      color: CupertinoColors.systemOrange,
+                                      shape: BoxShape.circle,
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                const Text(
-                                  'Emergencies',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w500,
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'Posts',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: _toggleLegendVisibility,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: BoxDecoration(
+                                      color: CupertinoColors.systemRed,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: CupertinoColors.white,
+                                        width: 1,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'Emergencies',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                             const SizedBox(height: 10),
                             CupertinoButton(
@@ -1237,10 +1582,16 @@ class _HomeScreenState extends State<HomeScreen> {
                             CupertinoButton(
                               padding: EdgeInsets.zero,
                               minSize: 0,
-                              onPressed: () {
+                              onPressed: () async {
                                 setState(() {
                                   _showAllDistricts = !_showAllDistricts;
+                                  if (_showAllDistricts) {
+                                    _stateFilter = null;
+                                  }
                                 });
+                                if (!_showAllDistricts) {
+                                  await _syncStateFilterWithPosition();
+                                }
                               },
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -1294,6 +1645,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   snap: true,
                   snapSizes: const [0.33, 0.66, 1.0], // Three snap positions
                   builder: (context, scrollController) {
+                    final visibleDistricts = _getVisibleDistricts();
                     return Container(
                       decoration: const BoxDecoration(
                         color: CupertinoColors.systemGroupedBackground,
@@ -1338,13 +1690,41 @@ class _HomeScreenState extends State<HomeScreen> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
-                                      const Text(
-                                        'Regional Forums',
-                                        style: TextStyle(
-                                          fontSize: 28,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: -0.5,
-                                        ),
+                                      Row(
+                                        children: [
+                                          const Expanded(
+                                            child: Text(
+                                              'Regional Forums',
+                                              style: TextStyle(
+                                                fontSize: 28,
+                                                fontWeight: FontWeight.bold,
+                                                letterSpacing: -0.5,
+                                              ),
+                                            ),
+                                          ),
+                                          if (!_showAllDistricts &&
+                                              _currentDistrict != null)
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 10,
+                                                    vertical: 4,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color:
+                                                    CupertinoColors.systemGrey6,
+                                                borderRadius:
+                                                    BorderRadius.circular(20),
+                                              ),
+                                              child: Text(
+                                                _currentDistrict!.state,
+                                                style: const TextStyle(
+                                                  fontSize: 13,
+                                                  color: CupertinoColors.label,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
                                       ),
                                       // Current District Summary
                                       if (_currentDistrict != null) ...[
@@ -1447,7 +1827,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 context,
                                 index,
                               ) {
-                                final district = _districts[index];
+                                final district = visibleDistricts[index];
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 8),
                                   decoration: BoxDecoration(
@@ -1491,7 +1871,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     onTap: () => _navigateToForum(district),
                                   ),
                                 );
-                              }, childCount: _districts.length),
+                              }, childCount: visibleDistricts.length),
                             ),
                           ),
                           // GPS Info Box at bottom
@@ -1639,6 +2019,75 @@ class _HomeScreenState extends State<HomeScreen> {
                     );
                   },
                 ),
+                // Shop Button
+                Positioned(
+                  left: 16,
+                  top: 16,
+                  child: CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: _openShopScreen,
+                    child: Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: CupertinoColors.systemBackground,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: CupertinoColors.black.withValues(
+                              alpha: 0.15,
+                            ),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        CupertinoIcons.bag,
+                        color: CupertinoColors.systemBlue,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                ),
+                // Location Sharing Toggle
+                if (_currentUser != null)
+                  Positioned(
+                    left: 16,
+                    top: 70,
+                    child: CupertinoButton(
+                      padding: EdgeInsets.zero,
+                      onPressed: _toggleLocationSharing,
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: _currentUser!.shareLocation
+                              ? CupertinoColors.systemGreen
+                              : CupertinoColors.systemBackground,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: CupertinoColors.black.withValues(
+                                alpha: 0.15,
+                              ),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          _currentUser!.shareLocation
+                              ? CupertinoIcons.dot_radiowaves_left_right
+                              : CupertinoIcons.dot_square,
+                          color: _currentUser!.shareLocation
+                              ? CupertinoColors.white
+                              : CupertinoColors.systemGrey,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ),
                 // Center on User Location Button
                 if (_currentUserPosition != null)
                   Positioned(
@@ -1726,12 +2175,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     right: 8,
                     child: CupertinoButton(
                       padding: EdgeInsets.zero,
-                      onPressed: () {
-                        setState(() {
-                          _showLegendBox = true;
-                          _legendBoxOffset = 0;
-                        });
-                      },
+                      onPressed: () => _setLegendVisibility(true),
                       child: Container(
                         width: 36,
                         height: 36,

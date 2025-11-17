@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import '../services/auth_service.dart';
+import '../services/session_service.dart';
 import '../models/user.dart';
 import 'home_screen.dart';
 import 'friends_screen.dart';
@@ -15,6 +16,7 @@ class AuthScreen extends StatefulWidget {
 
 class _AuthScreenState extends State<AuthScreen> {
   final AuthService _authService = AuthService();
+  final SessionService _sessionService = SessionService();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   bool _isLogin = true;
@@ -57,6 +59,7 @@ class _AuthScreenState extends State<AuthScreen> {
         setState(() {
           _isLoading = false;
         });
+        await _sessionService.saveUser(authenticatedUser);
         if (widget.onAuthSuccess != null) {
           widget.onAuthSuccess!(authenticatedUser);
           if (Navigator.canPop(context)) {
