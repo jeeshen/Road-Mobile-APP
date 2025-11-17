@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import '../models/district.dart';
 import '../models/post.dart';
 import '../models/post_category.dart';
+import '../models/user.dart';
 import '../services/firebase_service.dart';
 import '../services/nlp_service.dart';
 import '../services/location_service.dart';
@@ -19,6 +20,7 @@ class CreatePostScreen extends StatefulWidget {
   final double? longitude;
   final bool isRoadDamage;
   final double? roadDamageSeverity;
+  final User? currentUser;
 
   const CreatePostScreen({
     super.key,
@@ -27,6 +29,7 @@ class CreatePostScreen extends StatefulWidget {
     this.longitude,
     this.isRoadDamage = false,
     this.roadDamageSeverity,
+    this.currentUser,
   });
 
   @override
@@ -59,6 +62,9 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.currentUser != null) {
+      _usernameController.text = widget.currentUser!.name;
+    }
     if (widget.isRoadDamage) {
       _generateAIContent();
     }
@@ -246,13 +252,20 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       }
 
       // Create initial post
+      final activeUserId = widget.currentUser?.id ?? 'guest_user';
+      final hasAccountName =
+          widget.currentUser != null && widget.currentUser!.name.isNotEmpty;
+      final displayName = hasAccountName
+          ? widget.currentUser!.name
+          : (_usernameController.text.isEmpty
+              ? 'Anonymous'
+              : _usernameController.text);
+
       Post post = Post(
         id: const Uuid().v4(),
         districtId: widget.district.id,
-        userId: 'demo_user',
-        username: _usernameController.text.isEmpty
-            ? 'Anonymous'
-            : _usernameController.text,
+        userId: activeUserId,
+        username: displayName,
         title: title,
         content: content,
         category: _selectedCategory,
@@ -453,7 +466,7 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                       ),
                     ),
                   // Username Section
-                  if (!widget.isRoadDamage)
+                  if (!widget.isRoadDamage && widget.currentUser == null)
                     Container(
                       margin: const EdgeInsets.symmetric(
                         horizontal: 16,

@@ -27,6 +27,11 @@ A regional-style transportation forum app for Malaysia with real-time traffic up
 
 ✅ **Clean Cupertino UI**: iOS-style minimalist design
 
+## Upcoming Friend Features
+
+- [ ] Friend home page
+- [ ] Friend's post in every forum
+
 ## Setup Instructions
 
 ### 1. Install Dependencies

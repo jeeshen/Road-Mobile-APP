@@ -5,12 +5,14 @@ import 'package:uuid/uuid.dart';
 import '../models/post.dart';
 import '../models/comment.dart';
 import '../models/post_category.dart';
+import '../models/user.dart';
 import '../services/firebase_service.dart';
 
 class PostDetailScreen extends StatefulWidget {
   final Post post;
+  final User? currentUser;
 
-  const PostDetailScreen({super.key, required this.post});
+  const PostDetailScreen({super.key, required this.post, this.currentUser});
 
   @override
   State<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -20,13 +22,27 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   final FirebaseService _firebaseService = FirebaseService();
   final TextEditingController _commentController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
-  final String _currentUserId = 'demo_user'; // TODO: Replace with actual user ID
   Post? _currentPost;
+
+  String get _activeUserId => widget.currentUser?.id ?? 'guest_user';
+
+  bool get _hasAccountName =>
+      widget.currentUser != null && widget.currentUser!.name.isNotEmpty;
+
+  String get _resolvedDisplayName {
+    if (_hasAccountName) return widget.currentUser!.name;
+    return _usernameController.text.isEmpty
+        ? 'Anonymous'
+        : _usernameController.text;
+  }
 
   @override
   void initState() {
     super.initState();
     _currentPost = widget.post;
+    if (_hasAccountName) {
+      _usernameController.text = widget.currentUser!.name;
+    }
     _loadPostUpdates();
   }
 
@@ -48,7 +64,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     if (_currentPost == null) return;
 
     try {
-      await _firebaseService.toggleLike(_currentPost!.id, _currentUserId);
+      await _firebaseService.toggleLike(_currentPost!.id, _activeUserId);
     } catch (e) {
       if (!mounted) return;
       showCupertinoDialog(
@@ -80,10 +96,8 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     final comment = Comment(
       id: const Uuid().v4(),
       postId: widget.post.id,
-      userId: 'demo_user',
-      username: _usernameController.text.isEmpty
-          ? 'Anonymous'
-          : _usernameController.text,
+      userId: _activeUserId,
+      username: _resolvedDisplayName,
       content: _commentController.text,
       createdAt: DateTime.now(),
     );
@@ -115,7 +129,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
     if (_currentPost == null) return;
 
     // Check if already reported
-    if (_currentPost!.reportedBy.contains(_currentUserId)) {
+    if (_currentPost!.reportedBy.contains(_activeUserId)) {
       showCupertinoDialog(
         context: context,
         builder: (context) => CupertinoAlertDialog(
@@ -154,7 +168,10 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
 
     if (confirmed == true) {
       try {
-        await _firebaseService.reportInaccurate(_currentPost!.id, _currentUserId);
+        await _firebaseService.reportInaccurate(
+          _currentPost!.id,
+          _activeUserId,
+        );
         if (!mounted) return;
         
         showCupertinoDialog(
@@ -293,10 +310,10 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
                                     Icon(
-                                      (_currentPost?.likedBy.contains(_currentUserId) ?? false)
+                                      (_currentPost?.likedBy.contains(_activeUserId) ?? false)
                                           ? CupertinoIcons.heart_fill
                                           : CupertinoIcons.heart,
-                                      color: (_currentPost?.likedBy.contains(_currentUserId) ?? false)
+                                      color: (_currentPost?.likedBy.contains(_activeUserId) ?? false)
                                           ? CupertinoColors.systemRed
                                           : CupertinoColors.secondaryLabel,
                                       size: 20,
@@ -306,7 +323,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                       '${_currentPost?.likeCount ?? widget.post.likeCount}',
                                       style: TextStyle(
                                         fontSize: 15,
-                                        color: (_currentPost?.likedBy.contains(_currentUserId) ?? false)
+                                      color: (_currentPost?.likedBy.contains(_activeUserId) ?? false)
                                             ? CupertinoColors.systemRed
                                             : CupertinoColors.secondaryLabel,
                                         fontWeight: FontWeight.w500,
@@ -354,7 +371,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                       'Report',
                                       style: TextStyle(
                                         fontSize: 13,
-                                        color: (_currentPost?.reportedBy.contains(_currentUserId) ?? false)
+                                        color: (_currentPost?.reportedBy.contains(_activeUserId) ?? false)
                                             ? CupertinoColors.systemRed
                                             : CupertinoColors.systemOrange,
                                         fontWeight: FontWeight.w500,
@@ -696,21 +713,24 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                 top: false,
                 child: Column(
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: CupertinoColors.systemGrey6,
-                        borderRadius: BorderRadius.circular(10),
+                    if (widget.currentUser == null) ...[
+                      Container(
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: CupertinoColors.systemGrey6,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: CupertinoTextField(
+                          controller: _usernameController,
+                          placeholder: 'Username (Optional)',
+                          padding: const EdgeInsets.all(8),
+                          decoration: null,
+                          style: const TextStyle(fontSize: 15),
+                        ),
                       ),
-                      child: CupertinoTextField(
-                        controller: _usernameController,
-                        placeholder: 'Username (Optional)',
-                        padding: const EdgeInsets.all(8),
-                        decoration: null,
-                        style: const TextStyle(fontSize: 15),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
+                      const SizedBox(height: 10),
+                    ],
                     Row(
                       children: [
                         Expanded(

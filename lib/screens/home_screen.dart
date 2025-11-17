@@ -635,13 +635,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _navigateToForum(District district) {
     Navigator.of(context).push(
-      CupertinoPageRoute(builder: (context) => ForumScreen(district: district)),
+      CupertinoPageRoute(
+        builder: (context) => ForumScreen(
+          district: district,
+          currentUser: _currentUser,
+        ),
+      ),
     );
   }
 
   void _navigateToPostDetail(Post post) {
     Navigator.of(context).push(
-      CupertinoPageRoute(builder: (context) => PostDetailScreen(post: post)),
+      CupertinoPageRoute(
+        builder: (context) => PostDetailScreen(
+          post: post,
+          currentUser: _currentUser,
+        ),
+      ),
     );
   }
 
@@ -729,6 +739,7 @@ class _HomeScreenState extends State<HomeScreen> {
           longitude: location.longitude,
           isRoadDamage: isRoadDamage,
           roadDamageSeverity: roadDamageSeverity,
+          currentUser: _currentUser,
         ),
       ),
     );

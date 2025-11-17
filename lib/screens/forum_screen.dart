@@ -4,27 +4,37 @@ import 'package:cached_network_image/cached_network_image.dart';
 import '../models/district.dart';
 import '../models/post.dart';
 import '../models/post_category.dart';
+import '../models/user.dart';
 import '../services/firebase_service.dart';
 import 'post_detail_screen.dart';
 import 'create_post_screen.dart';
 
 class ForumScreen extends StatelessWidget {
   final District district;
+  final User? currentUser;
   final FirebaseService _firebaseService = FirebaseService();
 
-  ForumScreen({super.key, required this.district});
+  ForumScreen({super.key, required this.district, this.currentUser});
 
   void _navigateToCreatePost(BuildContext context) {
     Navigator.of(context).push(
       CupertinoPageRoute(
-        builder: (context) => CreatePostScreen(district: district),
+        builder: (context) => CreatePostScreen(
+          district: district,
+          currentUser: currentUser,
+        ),
       ),
     );
   }
 
   void _navigateToPostDetail(BuildContext context, Post post) {
     Navigator.of(context).push(
-      CupertinoPageRoute(builder: (context) => PostDetailScreen(post: post)),
+      CupertinoPageRoute(
+        builder: (context) => PostDetailScreen(
+          post: post,
+          currentUser: currentUser,
+        ),
+      ),
     );
   }
 
