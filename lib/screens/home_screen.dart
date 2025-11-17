@@ -6,16 +6,19 @@ import 'package:geolocator/geolocator.dart';
 import '../models/district.dart';
 import '../models/post.dart';
 import '../models/post_category.dart';
+import '../models/user.dart';
 import '../services/firebase_service.dart';
 import '../services/location_service.dart';
 import '../services/chatgpt_service.dart';
 import '../services/analytics_service.dart' hide RiskLevel;
 import '../services/road_damage_service.dart';
+import 'auth_screen.dart';
 import 'forum_screen.dart';
 import 'debug_screen.dart';
 import 'post_detail_screen.dart';
 import 'create_post_screen.dart';
 import 'historical_data_screen.dart';
+import 'friends_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -35,6 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
   );
   List<District> _districts = [];
   List<Post> _allPosts = [];
+  User? _currentUser;
   bool _isLoading = true;
   StreamSubscription<List<Post>>? _postsSubscription;
   StreamSubscription<Position>? _positionSubscription;
@@ -641,6 +645,45 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _handleProfileButton() {
+    if (_currentUser == null) {
+      Navigator.of(context).push(
+        CupertinoPageRoute(
+          builder: (context) => AuthScreen(
+            onAuthSuccess: (user) {
+              if (!mounted) return;
+              setState(() {
+                _currentUser = user;
+              });
+              Future.microtask(_openFriendsScreen);
+            },
+          ),
+        ),
+      );
+    } else {
+      _openFriendsScreen();
+    }
+  }
+
+  void _openFriendsScreen() {
+    if (_currentUser == null) return;
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (context) => FriendsScreen(
+          currentUser: _currentUser!,
+          onLogout: _handleLogout,
+        ),
+      ),
+    );
+  }
+
+  void _handleLogout() {
+    if (!mounted) return;
+    setState(() {
+      _currentUser = null;
+    });
+  }
+
   void _showCreatePostDialog(LatLng location) {
     // Find nearest district
     District? nearestDistrict = _findNearestDistrict(location);
@@ -882,14 +925,29 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           },
         ),
-        trailing: CupertinoButton(
-          padding: EdgeInsets.zero,
-          child: const Icon(CupertinoIcons.info_circle),
-          onPressed: () {
-            Navigator.of(context).push(
-              CupertinoPageRoute(builder: (context) => const DebugScreen()),
-            );
-          },
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CupertinoButton(
+              padding: EdgeInsets.zero,
+              child: const Icon(CupertinoIcons.info_circle),
+              onPressed: () {
+                Navigator.of(context).push(
+                  CupertinoPageRoute(builder: (context) => const DebugScreen()),
+                );
+              },
+            ),
+            const SizedBox(width: 4),
+            CupertinoButton(
+              padding: EdgeInsets.zero,
+              child: Icon(
+                _currentUser == null
+                    ? CupertinoIcons.person_crop_circle_badge_plus
+                    : CupertinoIcons.person_crop_circle_fill,
+              ),
+              onPressed: _handleProfileButton,
+            ),
+          ],
         ),
       ),
       child: _isLoading
