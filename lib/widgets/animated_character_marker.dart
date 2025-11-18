@@ -9,6 +9,7 @@ class AnimatedCharacterMarker extends StatefulWidget {
   final bool showName;
   final bool enableClick;
   final double scale;
+  final bool isMoving;
 
   const AnimatedCharacterMarker({
     super.key,
@@ -17,6 +18,7 @@ class AnimatedCharacterMarker extends StatefulWidget {
     this.showName = true,
     this.enableClick = true,
     this.scale = 1.0,
+    this.isMoving = false,
   });
 
   @override
@@ -34,20 +36,35 @@ class _AnimatedCharacterMarkerState extends State<AnimatedCharacterMarker> {
   @override
   void initState() {
     super.initState();
-    _currentAction = widget.actions.first; // Start with idle
+    _currentAction = _getAppropriateAction(); // Start with appropriate action
     _restartAnimationTimer();
   }
 
   @override
   void didUpdateWidget(AnimatedCharacterMarker oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // If actions changed (different character selected), reset to new idle
+    // If actions changed (different character selected), reset to new action
     if (oldWidget.actions != widget.actions) {
-      _currentAction = widget.actions.first;
+      _currentAction = _getAppropriateAction();
       _currentFrame = 0;
       _playingAction = false;
       _restartAnimationTimer();
     }
+    // If moving state changed, switch to appropriate action
+    if (oldWidget.isMoving != widget.isMoving && !_playingAction) {
+      _currentAction = _getAppropriateAction();
+      _currentFrame = 0;
+      _restartAnimationTimer();
+    }
+  }
+
+  CharacterAction _getAppropriateAction() {
+    if (widget.isMoving && widget.actions.length > 1) {
+      // Use running action (typically second action)
+      return widget.actions[1];
+    }
+    // Use idle action (first action)
+    return widget.actions.first;
   }
 
   void _restartAnimationTimer() {
@@ -79,7 +96,8 @@ class _AnimatedCharacterMarkerState extends State<AnimatedCharacterMarker> {
 
   Duration _frameDurationForAction(CharacterAction action) {
     final frameCount = action.frameCount.clamp(1, 100);
-    const baseDurationMs = 90;
+    // Increased base duration for better performance (less frequent updates)
+    const baseDurationMs = 120; // Increased from 90 to 120
     const referenceFrames = 6;
     final multiplier = (frameCount / referenceFrames).clamp(1.0, 2.5);
     final durationMs = (baseDurationMs * multiplier).round();
@@ -133,6 +151,10 @@ class _AnimatedCharacterMarkerState extends State<AnimatedCharacterMarker> {
               child: Image.asset(
                 _currentAction!.assetPath,
                 fit: BoxFit.cover,
+                // Performance optimization: cache images
+                cacheWidth: 192,
+                cacheHeight: 192,
+                filterQuality: FilterQuality.medium, // Balanced quality/performance
                 // Sprite sheet: 192x192 per frame, frames horizontally
                 // Calculate the offset based on current frame
                 alignment: Alignment(

@@ -72,6 +72,9 @@ dependencies:
   record: ^5.1.1
   video_player: ^2.9.1
   
+  # Voice alerts
+  flutter_tts: ^4.2.0
+  
   # HTTP for API calls
   # http: ^1.2.2  # Already included above
 

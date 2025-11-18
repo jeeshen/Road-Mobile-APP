@@ -26,6 +26,7 @@ import 'create_post_screen.dart';
 import 'historical_data_screen.dart';
 import 'friends_screen.dart';
 import 'shop_screen.dart';
+import 'destination_search_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -83,6 +84,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final MapController _mapController =
       MapController(); // Map controller for centering
   bool _isDrivingMode = false; // Driving mode state
+  double _currentZoom =
+      15.0; // Track current zoom level for performance optimization
 
   // Box visibility and sliding state
   bool _showLegendBox = false; // Hide legend by default
@@ -408,10 +411,17 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<Marker> _buildPostMarkers() {
+    // Show simplified markers at lower zoom levels
+    final showSimplified = _currentZoom < 11.0;
+
     if (_cachedPostMarkers != null &&
-        _allPosts.length == _cachedPostMarkers!.length) {
+        _allPosts.length == _cachedPostMarkers!.length &&
+        !showSimplified) {
       return _cachedPostMarkers!;
     }
+
+    // Don't show individual posts at very low zoom
+    if (_currentZoom < 9.0) return [];
 
     _cachedPostMarkers = _allPosts
         .map((post) {
@@ -466,6 +476,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   List<Marker> _buildDistrictMarkers() {
+    // Skip district markers at high zoom levels to reduce clutter and improve performance
+    if (_currentZoom > 13.0) return [];
+
     final districtsToShow = _getVisibleDistricts();
     final postCounts = _analyticsService.getPostCountsByDistrict(_allPosts);
 
@@ -892,6 +905,37 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openNavigationSearch() {
+    if (_currentUserPosition == null) {
+      showCupertinoDialog(
+        context: context,
+        builder: (context) => CupertinoAlertDialog(
+          title: const Text('Location Required'),
+          content: const Text(
+            'Please enable location services to use navigation.',
+          ),
+          actions: [
+            CupertinoDialogAction(
+              child: const Text('OK'),
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (context) => DestinationSearchScreen(
+          currentPosition: _currentUserPosition!,
+          districts: _districts,
+          allPosts: _allPosts,
+        ),
+      ),
+    );
+  }
+
   void _showCreatePostDialog(LatLng location) {
     // Find nearest district
     District? nearestDistrict = _findNearestDistrict(location);
@@ -947,10 +991,10 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Marker> _buildUserLocationMarker() {
     if (_currentUserPosition == null) return [];
 
-    // Show character if user has selected one and location sharing is enabled
+    // Show character ONLY if location sharing is enabled
     if (_currentUser != null &&
-        _currentUser!.selectedCharacter != null &&
-        _currentUser!.shareLocation) {
+        _currentUser!.shareLocation &&
+        _currentUser!.selectedCharacter != null) {
       // Find character by ID
       final character = Character.getAllCharacters().firstWhere(
         (c) => c.id == _currentUser!.selectedCharacter,
@@ -1312,25 +1356,34 @@ class _HomeScreenState extends State<HomeScreen> {
                     onLongPress: (tapPosition, point) {
                       _showCreatePostDialog(point);
                     },
+                    onPositionChanged: (position, hasGesture) {
+                      if (hasGesture) {
+                        setState(() {
+                          _currentZoom = position.zoom;
+                        });
+                      }
+                    },
                   ),
                   children: [
-                    Builder(
-                      builder: (context) {
-                        final devicePixelRatio = MediaQuery.of(
-                          context,
-                        ).devicePixelRatio;
-                        return TileLayer(
-                          // CartoDB Positron - Minimal road-focused style like Waze (roads only, minimal labels)
-                          urlTemplate:
-                              'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-                          subdomains: const ['a', 'b', 'c', 'd'],
-                          userAgentPackageName: 'com.roadmobile.app',
-                          retinaMode: devicePixelRatio > 1.0,
-                          maxZoom: 19,
-                          // Alternative: OpenStreetMap France (more detailed roads)
-                          // urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
-                        );
-                      },
+                    TileLayer(
+                      // CartoDB Positron - Minimal road-focused style like Waze (roads only, minimal labels)
+                      urlTemplate:
+                          'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+                      subdomains: const ['a', 'b', 'c', 'd'],
+                      userAgentPackageName: 'com.roadmobile.app',
+                      retinaMode: true,
+                      maxZoom: 19,
+                      maxNativeZoom: 19,
+                      keepBuffer:
+                          2, // Reduced from 8 to 2 for better performance
+                      panBuffer:
+                          1, // Reduced from 2 to 1 for better performance
+                      tileProvider: NetworkTileProvider(),
+                      tileDisplay: const TileDisplay.fadeIn(
+                        duration: Duration(milliseconds: 100),
+                      ),
+                      // Alternative: OpenStreetMap France (more detailed roads)
+                      // urlTemplate: 'https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
                     ),
                     // Heatmap layer
                     if (_showHeatmap)
@@ -1874,146 +1927,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               }, childCount: visibleDistricts.length),
                             ),
                           ),
-                          // GPS Info Box at bottom
-                          SliverToBoxAdapter(
-                            child: Container(
-                              margin: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: CupertinoColors.systemBackground,
-                                borderRadius: BorderRadius.circular(12),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: CupertinoColors.black.withValues(
-                                      alpha: 0.05,
-                                    ),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Icon(
-                                        _gpsStatus == 'GPS Disabled' ||
-                                                _gpsStatus == 'No Location'
-                                            ? CupertinoIcons.location_slash
-                                            : CupertinoIcons.location_fill,
-                                        size: 18,
-                                        color: _gpsStatus == 'High Accuracy'
-                                            ? CupertinoColors.systemGreen
-                                            : _gpsStatus == 'Medium Accuracy'
-                                            ? CupertinoColors.systemOrange
-                                            : CupertinoColors.systemRed,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        'GPS Status',
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          const Text(
-                                            'Accuracy',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: CupertinoColors
-                                                  .secondaryLabel,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            _gpsStatus,
-                                            style: TextStyle(
-                                              fontSize: 15,
-                                              fontWeight: FontWeight.w600,
-                                              color:
-                                                  _gpsStatus == 'High Accuracy'
-                                                  ? CupertinoColors.systemGreen
-                                                  : _gpsStatus ==
-                                                        'Medium Accuracy'
-                                                  ? CupertinoColors.systemOrange
-                                                  : CupertinoColors
-                                                        .secondaryLabel,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      if (_currentSpeed != null &&
-                                          _currentSpeed! > 0)
-                                        Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.end,
-                                          children: [
-                                            const Text(
-                                              'Speed',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: CupertinoColors
-                                                    .secondaryLabel,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              '${_currentSpeed!.toStringAsFixed(0)} km/h',
-                                              style: const TextStyle(
-                                                fontSize: 15,
-                                                fontWeight: FontWeight.w600,
-                                                color: CupertinoColors.label,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                    ],
-                                  ),
-                                  if (_currentUserPosition != null) ...[
-                                    const SizedBox(height: 12),
-                                    Container(
-                                      height: 0.5,
-                                      color: CupertinoColors.separator,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Row(
-                                      children: [
-                                        const Icon(
-                                          CupertinoIcons.map_pin,
-                                          size: 14,
-                                          color: CupertinoColors.secondaryLabel,
-                                        ),
-                                        const SizedBox(width: 6),
-                                        Expanded(
-                                          child: Text(
-                                            '${_currentUserPosition!.latitude.toStringAsFixed(6)}, ${_currentUserPosition!.longitude.toStringAsFixed(6)}',
-                                            style: const TextStyle(
-                                              fontSize: 11,
-                                              color: CupertinoColors
-                                                  .secondaryLabel,
-                                              fontFamily: 'monospace',
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ),
                         ],
                       ),
                     );
@@ -2083,6 +1996,38 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: _currentUser!.shareLocation
                               ? CupertinoColors.white
                               : CupertinoColors.systemGrey,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ),
+                // Navigation Button (moved to top left)
+                if (_currentUserPosition != null)
+                  Positioned(
+                    left: 16,
+                    top: 124,
+                    child: CupertinoButton(
+                      padding: EdgeInsets.zero,
+                      onPressed: _openNavigationSearch,
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: CupertinoColors.systemBlue,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: CupertinoColors.systemBlue.withValues(
+                                alpha: 0.4,
+                              ),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          CupertinoIcons.location_north_fill,
+                          color: CupertinoColors.white,
                           size: 22,
                         ),
                       ),
