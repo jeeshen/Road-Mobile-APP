@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/user.dart';
 import '../services/friend_service.dart';
 import 'add_friend_screen.dart';
+import 'friend_home_screen.dart';
 
 class FriendsScreen extends StatefulWidget {
   final User currentUser;
@@ -30,6 +31,22 @@ class _FriendsScreenState extends State<FriendsScreen> {
     Navigator.of(context).push(
       CupertinoPageRoute(
         builder: (context) => AddFriendScreen(currentUser: widget.currentUser),
+      ),
+    );
+  }
+
+  void _navigateToFriendHome(Map<String, dynamic> friend) {
+    final friendId = friend['friendId']?.toString() ?? '';
+    if (friendId.isEmpty) return;
+    final friendName = friend['friendName']?.toString() ?? 'Friend';
+
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (context) => FriendHomeScreen(
+          currentUser: widget.currentUser,
+          friendId: friendId,
+          friendName: friendName,
+        ),
       ),
     );
   }
@@ -92,6 +109,13 @@ class _FriendsScreenState extends State<FriendsScreen> {
         title: Text(friendName),
         message: Text('User ID: $friendId'),
         actions: [
+          CupertinoActionSheetAction(
+            onPressed: () {
+              Navigator.pop(context);
+              _navigateToFriendHome(friend);
+            },
+            child: const Text('View Forum Activity'),
+          ),
           CupertinoActionSheetAction(
             onPressed: () {
               Navigator.pop(context);
@@ -284,42 +308,103 @@ class _FriendsScreenState extends State<FriendsScreen> {
     final friendId = friend['friendId']?.toString() ?? '-';
     final initials = friendName.isNotEmpty ? friendName[0].toUpperCase() : '?';
 
-    return CupertinoListTile(
-      onTap: () => _showFriendActions(friend),
-      leading: Container(
-        width: 48,
-        height: 48,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _navigateToFriendHome(friend),
+      child: Container(
+        padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: CupertinoColors.systemBlue.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Center(
-          child: Text(
-            initials,
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w600,
-              color: CupertinoColors.systemBlue,
+          color: CupertinoColors.white,
+          borderRadius: BorderRadius.circular(22),
+          boxShadow: [
+            BoxShadow(
+              color: CupertinoColors.black.withOpacity(0.04),
+              blurRadius: 20,
+              offset: const Offset(0, 10),
             ),
-          ),
+          ],
         ),
-      ),
-      title: Text(
-        friendName,
-        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-      ),
-      subtitle: Text(
-        'ID | $friendId',
-        style: const TextStyle(
-          fontSize: 13,
-          fontFamily: 'monospace',
-          color: CupertinoColors.secondaryLabel,
+        child: Row(
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                gradient: LinearGradient(
+                  colors: [
+                    CupertinoColors.systemBlue.withOpacity(0.9),
+                    CupertinoColors.activeBlue,
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              child: Center(
+                child: Text(
+                  initials,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    color: CupertinoColors.white,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    friendName,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: CupertinoColors.systemGrey5,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'ID • $friendId',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'monospace',
+                        color: CupertinoColors.secondaryLabel,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            CupertinoButton(
+              padding: EdgeInsets.zero,
+              minSize: 0,
+              onPressed: () => _showFriendActions(friend),
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: CupertinoColors.systemGrey6,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  CupertinoIcons.ellipsis,
+                  color: CupertinoColors.systemGrey,
+                  size: 18,
+                ),
+              ),
+            ),
+          ],
         ),
-      ),
-      trailing: const Icon(
-        CupertinoIcons.chevron_forward,
-        color: CupertinoColors.systemGrey2,
-        size: 18,
       ),
     );
   }
@@ -507,19 +592,31 @@ class _FriendsScreenState extends State<FriendsScreen> {
                   }
 
                   return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       _buildInsightsRow(friends.length, filteredFriends.length),
                       Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 12,
-                        ),
-                        child: CupertinoListSection.insetGrouped(
-                          margin: EdgeInsets.zero,
-                          header: const Text('Connections'),
-                          children: filteredFriends
-                              .map((friend) => _buildFriendTile(friend))
-                              .toList(),
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Connections',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: CupertinoColors.secondaryLabel,
+                                letterSpacing: 0.2,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            ...filteredFriends.map(
+                              (friend) => Padding(
+                                padding: const EdgeInsets.only(bottom: 14),
+                                child: _buildFriendTile(friend),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
