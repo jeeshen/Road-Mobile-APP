@@ -261,24 +261,22 @@ class _FriendHomeScreenState extends State<FriendHomeScreen> {
             ],
           ),
           const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: _ProfilePill(
-                  label: 'Character',
-                  value: characterLabel,
-                  icon: CupertinoIcons.game_controller_solid,
+          IntrinsicHeight(
+            child: Row(
+              children: [
+                Expanded(
+                  child: _ProfilePill(
+                    label: 'Character',
+                    value: characterLabel,
+                    icon: CupertinoIcons.game_controller_solid,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _ProfilePill(
-                  label: 'Location Sharing',
-                  value: (friend?.shareLocation ?? false) ? 'Enabled' : 'Off',
-                  icon: CupertinoIcons.location_solid,
+                const SizedBox(width: 12),
+                _LocationStatusIndicator(
+                  isEnabled: friend?.shareLocation ?? false,
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
@@ -424,14 +422,12 @@ class _FriendHomeScreenState extends State<FriendHomeScreen> {
       0,
       (sum, post) => sum + post.commentCount,
     );
-    final forums = posts.map((post) => post.districtId).toSet().length;
     final latestPost = posts.first.createdAt;
 
     return {
       'posts': posts.length,
       'likes': totalLikes,
       'comments': totalComments,
-      'forums': forums,
       'latest': latestPost,
     };
   }
@@ -452,29 +448,23 @@ class _FriendHomeScreenState extends State<FriendHomeScreen> {
   }
 
   Widget _buildStatsRow(Map<String, dynamic> stats) {
-    return Row(
-      children: [
-        _StatsChip(
-          label: 'Posts',
-          value: stats['posts'].toString(),
-          icon: CupertinoIcons.doc_plaintext,
-        ),
-        const SizedBox(width: 12),
-        _StatsChip(
-          label: 'Forums',
-          value: stats['forums'].toString(),
-          icon: CupertinoIcons.map_fill,
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _StatsChip(
-            label: 'Reactions',
-            value: '${stats['likes']} ♥  ·  ${stats['comments']} 💬',
-            icon: CupertinoIcons.heart_circle_fill,
-            isWide: true,
+    return IntrinsicHeight(
+      child: Row(
+        children: [
+          _StatsChip(
+            label: 'Posts',
+            value: stats['posts'].toString(),
+            icon: CupertinoIcons.doc_plaintext,
           ),
-        ),
-      ],
+          const SizedBox(width: 12),
+          Expanded(
+            child: _ReactionsChip(
+              likes: stats['likes'],
+              comments: stats['comments'],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -491,6 +481,37 @@ class _FriendHomeScreenState extends State<FriendHomeScreen> {
   );
 }
 
+class _LocationStatusIndicator extends StatelessWidget {
+  final bool isEnabled;
+
+  const _LocationStatusIndicator({required this.isEnabled});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isEnabled
+        ? CupertinoColors.systemGreen
+        : CupertinoColors.secondaryLabel;
+    final icon = isEnabled
+        ? CupertinoIcons.location_solid
+        : CupertinoIcons.location_slash;
+
+    return Semantics(
+      label: isEnabled
+          ? 'Location sharing enabled'
+          : 'Location sharing disabled',
+      child: Container(
+        width: 56,
+        height: double.infinity,
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Icon(icon, color: color),
+      ),
+    );
+  }
+}
+
 class _ProfilePill extends StatelessWidget {
   final String label;
   final String value;
@@ -505,6 +526,7 @@ class _ProfilePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      height: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: CupertinoColors.systemGrey6,
@@ -529,6 +551,9 @@ class _ProfilePill extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            softWrap: true,
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
           ),
         ],
@@ -541,20 +566,18 @@ class _StatsChip extends StatelessWidget {
   final String label;
   final String value;
   final IconData icon;
-  final bool isWide;
 
   const _StatsChip({
     required this.label,
     required this.value,
     required this.icon,
-    this.isWide = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
-      flex: isWide ? 2 : 1,
       child: Container(
+        height: double.infinity,
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: CupertinoColors.white,
@@ -584,15 +607,127 @@ class _StatsChip extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 6),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: isWide ? 15 : 18,
-                fontWeight: FontWeight.w600,
+            FittedBox(
+              alignment: Alignment.centerLeft,
+              fit: BoxFit.scaleDown,
+              child: Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ReactionsChip extends StatelessWidget {
+  final int likes;
+  final int comments;
+
+  const _ReactionsChip({
+    required this.likes,
+    required this.comments,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: CupertinoColors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: CupertinoColors.black.withOpacity(0.04),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(
+                CupertinoIcons.heart_circle_fill,
+                size: 18,
+                color: CupertinoColors.systemGrey,
+              ),
+              SizedBox(width: 6),
+              Text(
+                'Reactions',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: CupertinoColors.secondaryLabel,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              _ReactionStatPill(
+                icon: CupertinoIcons.heart_fill,
+                label: '$likes Likes',
+              ),
+              _ReactionStatPill(
+                icon: CupertinoIcons.text_bubble_fill,
+                label: '$comments Comments',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReactionStatPill extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _ReactionStatPill({
+    required this.icon,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: CupertinoColors.systemGrey6,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 14,
+            color: CupertinoColors.secondaryLabel,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: CupertinoColors.secondaryLabel,
+            ),
+          ),
+        ],
       ),
     );
   }

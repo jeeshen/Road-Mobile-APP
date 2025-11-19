@@ -151,10 +151,11 @@ class _AnimatedCharacterMarkerState extends State<AnimatedCharacterMarker> {
               child: Image.asset(
                 _currentAction!.assetPath,
                 fit: BoxFit.cover,
-                // Performance optimization: cache images
-                cacheWidth: 192,
+                // Decode full sprite sheet so per-frame alignment works
+                cacheWidth: 192 * _currentAction!.frameCount,
                 cacheHeight: 192,
-                filterQuality: FilterQuality.medium, // Balanced quality/performance
+                filterQuality:
+                    FilterQuality.medium, // Balanced quality/performance
                 // Sprite sheet: 192x192 per frame, frames horizontally
                 // Calculate the offset based on current frame
                 alignment: Alignment(
