@@ -20,6 +20,7 @@ class LocationSharingService {
       longitude: position.longitude,
       selectedCharacter: user.selectedCharacter,
       lastUpdate: DateTime.now(),
+      speed: position.speed, // Include speed for animation
     );
 
     await _firestore

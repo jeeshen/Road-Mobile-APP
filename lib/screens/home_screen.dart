@@ -27,6 +27,7 @@ import 'historical_data_screen.dart';
 import 'friends_screen.dart';
 import 'shop_screen.dart';
 import 'destination_search_screen.dart';
+import 'convoy_list_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -936,6 +937,19 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openConvoyScreen() {
+    if (_currentUser == null) {
+      _handleProfileButton();
+      return;
+    }
+
+    Navigator.of(context).push(
+      CupertinoPageRoute(
+        builder: (context) => ConvoyListScreen(currentUser: _currentUser!),
+      ),
+    );
+  }
+
   void _showCreatePostDialog(LatLng location) {
     // Find nearest district
     District? nearestDistrict = _findNearestDistrict(location);
@@ -1162,6 +1176,9 @@ class _HomeScreenState extends State<HomeScreen> {
           final isLancer = character.name.toLowerCase() == 'lancer';
           final scale = isLancer ? 1.4 : 1.0;
 
+          // Determine if user is moving (speed > 1 km/h)
+          final isMoving = (location.speed ?? 0) > 0.28; // 0.28 m/s = ~1 km/h
+
           return Marker(
             point: LatLng(location.latitude, location.longitude),
             width: 100,
@@ -1177,6 +1194,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 userName: location.userName,
                 enableClick: false,
                 scale: scale,
+                isMoving: isMoving,
               ),
             ),
           );
@@ -1292,7 +1310,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return CupertinoPageScaffold(
       navigationBar: CupertinoNavigationBar(
-        middle: const Text('Traffic Safety Malaysia'),
+        middle: const Text('Roady'),
         backgroundColor: CupertinoColors.systemBackground,
         leading: CupertinoButton(
           padding: EdgeInsets.zero,
@@ -2027,6 +2045,38 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         child: const Icon(
                           CupertinoIcons.location_north_fill,
+                          color: CupertinoColors.white,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ),
+                // Convoy/Drive Party Button
+                if (_currentUser != null)
+                  Positioned(
+                    left: 16,
+                    top: 178,
+                    child: CupertinoButton(
+                      padding: EdgeInsets.zero,
+                      onPressed: _openConvoyScreen,
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: CupertinoColors.systemPurple,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: CupertinoColors.systemPurple.withValues(
+                                alpha: 0.4,
+                              ),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          CupertinoIcons.car_detailed,
                           color: CupertinoColors.white,
                           size: 22,
                         ),

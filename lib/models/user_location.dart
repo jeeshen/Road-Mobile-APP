@@ -7,6 +7,7 @@ class UserLocation {
   final double longitude;
   final String? selectedCharacter;
   final DateTime lastUpdate;
+  final double? speed; // Speed in m/s
 
   UserLocation({
     required this.userId,
@@ -15,6 +16,7 @@ class UserLocation {
     required this.longitude,
     this.selectedCharacter,
     required this.lastUpdate,
+    this.speed,
   });
 
   Map<String, dynamic> toMap() {
@@ -25,6 +27,7 @@ class UserLocation {
       'longitude': longitude,
       'selectedCharacter': selectedCharacter,
       'lastUpdate': Timestamp.fromDate(lastUpdate),
+      'speed': speed,
     };
   }
 
@@ -36,7 +39,9 @@ class UserLocation {
       longitude: map['longitude'] ?? 0.0,
       selectedCharacter: map['selectedCharacter'],
       lastUpdate: (map['lastUpdate'] as Timestamp).toDate(),
+      speed: map['speed'],
     );
   }
 }
+
 

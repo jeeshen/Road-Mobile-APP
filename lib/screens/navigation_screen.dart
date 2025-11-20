@@ -16,6 +16,12 @@ import '../services/voice_alert_service.dart';
 import '../widgets/animated_character_marker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/trip.dart';
+import '../models/trip_status_update.dart';
+import '../models/trip_message.dart';
+import '../services/convoy_service.dart';
+import '../services/friend_service.dart';
+import 'package:image_picker/image_picker.dart';
 
 class NavigationScreen extends StatefulWidget {
   final LatLng destination;
@@ -23,6 +29,8 @@ class NavigationScreen extends StatefulWidget {
   final Position currentPosition;
   final List<Post> allPosts;
   final List<District> districts;
+  final Trip?
+  existingTrip; // If provided, join this trip instead of creating new one
 
   const NavigationScreen({
     super.key,
@@ -31,6 +39,7 @@ class NavigationScreen extends StatefulWidget {
     required this.currentPosition,
     required this.allPosts,
     required this.districts,
+    this.existingTrip,
   });
 
   @override
@@ -43,6 +52,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
   final LocationService _locationService = LocationService();
   final VoiceAlertService _voiceService = VoiceAlertService();
   final MapController _mapController = MapController();
+  final ConvoyService _convoyService = ConvoyService();
+  final FriendService _friendService = FriendService();
 
   List<nav_service.NavigationRoute>? _routes;
   nav_service.NavigationRoute? _selectedRoute;
@@ -57,17 +68,66 @@ class _NavigationScreenState extends State<NavigationScreen> {
   bool _voiceEnabled = true;
   bool _liveLocationEnabled = false;
   double _currentSpeed = 0.0;
+  double _currentHeading = 0.0;
   List<UserLocation> _liveUsers = [];
   User? _currentUser;
   bool _isMoving = false;
+  Trip? _activeTrip;
+  bool _showChat = false;
+  final TextEditingController _chatController = TextEditingController();
+  final ScrollController _chatScrollController = ScrollController();
+  TripStatusUpdate? _currentStatusDisplay;
+  Timer? _statusDisplayTimer;
+  bool _showingStatus = false;
+  StreamSubscription<List<TripStatusUpdate>>? _statusSubscription;
 
   @override
   void initState() {
     super.initState();
     _currentPosition = widget.currentPosition;
-    _calculateRoutes();
+
+    // If joining existing trip, skip route planning and start navigation
+    if (widget.existingTrip != null) {
+      _activeTrip = widget.existingTrip;
+      _setupExistingTrip();
+    } else {
+      _calculateRoutes();
+    }
+
     _loadLiveUsers();
     _loadCurrentUser();
+  }
+
+  void _setupExistingTrip() {
+    final estimatedDuration = widget.existingTrip!.estimatedArrival.difference(
+      DateTime.now(),
+    );
+
+    // Create a route from the trip's polyline
+    final route = nav_service.NavigationRoute(
+      id: widget.existingTrip!.id,
+      polyline: widget.existingTrip!.route,
+      totalDistance: widget.existingTrip!.totalDistance,
+      totalDuration: estimatedDuration.inSeconds.toDouble(),
+      type: nav_service.RouteType.balanced,
+      safetyScore: 100.0,
+      summary: 'Following ${widget.existingTrip!.creatorName}\'s route',
+      segments: [], // Will be calculated during navigation
+      riskPoints: [], // Will be populated from posts during navigation
+    );
+
+    setState(() {
+      _routes = [route];
+      _selectedRoute = route;
+      _isLoading = false;
+    });
+
+    // Auto-start navigation
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        _beginNavigation();
+      }
+    });
   }
 
   Future<void> _loadCurrentUser() async {
@@ -85,6 +145,24 @@ class _NavigationScreenState extends State<NavigationScreen> {
             _currentUser = User.fromMap(userDoc.data()!);
             _liveLocationEnabled = _currentUser?.shareLocation ?? false;
           });
+
+          // Start position tracking if live location is enabled
+          if (_liveLocationEnabled && !_isNavigating) {
+            _positionSubscription?.cancel();
+            _positionSubscription = _locationService
+                .getPositionStream(
+                  accuracy: LocationAccuracy.high,
+                  distanceFilter: 10,
+                )
+                .listen((position) {
+                  if (!mounted) return;
+                  setState(() {
+                    _currentPosition = position;
+                    _currentSpeed = position.speed * 3.6;
+                    _isMoving = position.speed > 0.28;
+                  });
+                });
+          }
         }
       }
     } catch (e) {
@@ -113,6 +191,36 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _liveLocationEnabled = !_liveLocationEnabled;
     });
 
+    // Start/stop position tracking based on live location status
+    if (_liveLocationEnabled && !_isNavigating) {
+      // Start position tracking for character animation during route planning
+      _positionSubscription?.cancel();
+      _positionSubscription = _locationService
+          .getPositionStream(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+          )
+          .listen((position) {
+            if (!mounted) return;
+            setState(() {
+              _currentPosition = position;
+              _currentSpeed = position.speed * 3.6;
+              _isMoving = position.speed > 0.28;
+              _currentHeading = position.heading;
+            });
+            // Update map position during route planning
+            if (!_isNavigating) {
+              _mapController.move(
+                LatLng(position.latitude, position.longitude),
+                _mapController.camera.zoom,
+              );
+            }
+          });
+    } else if (!_liveLocationEnabled && !_isNavigating) {
+      // Stop position tracking if not navigating and live location disabled
+      _positionSubscription?.cancel();
+    }
+
     // Update user's sharing status in Firebase
     try {
       await FirebaseFirestore.instance
@@ -135,7 +243,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _positionSubscription?.cancel();
     _liveUsersSubscription?.cancel();
     _navigationTimer?.cancel();
+    _statusDisplayTimer?.cancel();
+    _statusSubscription?.cancel();
     _voiceService.dispose();
+    _chatController.dispose();
+    _chatScrollController.dispose();
     super.dispose();
   }
 
@@ -177,6 +289,386 @@ class _NavigationScreenState extends State<NavigationScreen> {
   void _startNavigation() {
     if (_selectedRoute == null) return;
 
+    // Show drive party option before starting navigation
+    if (_currentUser != null) {
+      _showDrivePartyOption();
+    } else {
+      _beginNavigation();
+    }
+  }
+
+  void _showDrivePartyOption() {
+    showCupertinoModalPopup(
+      context: context,
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(5),
+        child: CupertinoActionSheet(
+          title: const Text('Start Navigation'),
+          message: const Text(
+            'Would you like to create a drive party and invite friends?',
+          ),
+          actions: [
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                _showInviteFriendsDialog();
+              },
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    CupertinoIcons.car_detailed,
+                    color: CupertinoColors.systemPurple,
+                  ),
+                  SizedBox(width: 8),
+                  Text('Create Drive Party'),
+                ],
+              ),
+            ),
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                _beginNavigation();
+              },
+              child: const Text('Navigate Solo'),
+            ),
+          ],
+          cancelButton: CupertinoActionSheetAction(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showInviteFriendsDialog() {
+    final Set<String> selectedFriends = {};
+
+    showCupertinoModalPopup(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return Container(
+            height: MediaQuery.of(context).size.height * 0.7,
+            decoration: const BoxDecoration(
+              color: CupertinoColors.systemBackground,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            ),
+            child: Column(
+              children: [
+                // Header
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: CupertinoColors.separator,
+                        width: 0.5,
+                      ),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        child: const Text('Cancel'),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                      const Expanded(
+                        child: Text(
+                          'Invite Friends',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                      CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        onPressed: () async {
+                          Navigator.pop(context);
+                          await _createDriveParty(selectedFriends.toList());
+                          _beginNavigation();
+                        },
+                        child: const Text(
+                          'Start',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Friends list
+                Expanded(
+                  child: StreamBuilder<List<Map<String, dynamic>>>(
+                    stream: _friendService.getFriendsStream(_currentUser!.id),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(
+                          child: CupertinoActivityIndicator(),
+                        );
+                      }
+
+                      final friends = snapshot.data ?? [];
+
+                      if (friends.isEmpty) {
+                        return const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Text(
+                              'No friends to invite\nAdd friends first!',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: CupertinoColors.secondaryLabel,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: friends.length,
+                        itemBuilder: (context, index) {
+                          final friend = friends[index];
+                          final friendId = friend['friendId'] as String;
+                          final friendName = friend['friendName'] as String;
+                          final isSelected = selectedFriends.contains(friendId);
+
+                          return GestureDetector(
+                            onTap: () {
+                              setModalState(() {
+                                if (isSelected) {
+                                  selectedFriends.remove(friendId);
+                                } else {
+                                  selectedFriends.add(friendId);
+                                }
+                              });
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? CupertinoColors.systemPurple.withValues(
+                                        alpha: 0.1,
+                                      )
+                                    : CupertinoColors.systemGrey6,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: isSelected
+                                      ? CupertinoColors.systemPurple
+                                      : CupertinoColors.systemGrey6,
+                                  width: 2,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 40,
+                                    height: 40,
+                                    decoration: BoxDecoration(
+                                      color: CupertinoColors.systemBlue
+                                          .withValues(alpha: 0.1),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        friendName.isNotEmpty
+                                            ? friendName[0].toUpperCase()
+                                            : '?',
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w600,
+                                          color: CupertinoColors.systemBlue,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      friendName,
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                  if (isSelected)
+                                    const Icon(
+                                      CupertinoIcons.check_mark_circled_solid,
+                                      color: CupertinoColors.systemPurple,
+                                      size: 24,
+                                    )
+                                  else
+                                    const Icon(
+                                      CupertinoIcons.circle,
+                                      color: CupertinoColors.systemGrey3,
+                                      size: 24,
+                                    ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                // Start without inviting button
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                      top: BorderSide(
+                        color: CupertinoColors.separator,
+                        width: 0.5,
+                      ),
+                    ),
+                  ),
+                  child: CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: () async {
+                      Navigator.pop(context);
+                      await _createDriveParty([]);
+                      _beginNavigation();
+                    },
+                    child: Text(
+                      selectedFriends.isEmpty
+                          ? 'Start Solo'
+                          : 'Start Without Inviting',
+                      style: const TextStyle(
+                        color: CupertinoColors.secondaryLabel,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _createDriveParty(List<String> friendIds) async {
+    if (_currentUser == null ||
+        _selectedRoute == null ||
+        _currentPosition == null)
+      return;
+
+    try {
+      // Calculate ETA
+      final duration = _parseDuration(_selectedRoute!.durationText);
+      final eta = DateTime.now().add(duration);
+
+      // Create trip
+      final trip = await _convoyService.createTrip(
+        creatorId: _currentUser!.id,
+        creatorName: _currentUser!.name,
+        title: 'Trip to ${widget.destinationName}',
+        startLocation: LatLng(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+        ),
+        startAddress: 'Current Location',
+        destination: widget.destination,
+        destinationAddress: widget.destinationName,
+        route: _selectedRoute!.polyline,
+        estimatedArrival: eta,
+        updateInterval: 30,
+        totalDistance: _parseDistance(_selectedRoute!.distanceText),
+      );
+
+      setState(() {
+        _activeTrip = trip;
+      });
+
+      // Invite friends if any selected
+      if (friendIds.isNotEmpty) {
+        await _convoyService.inviteFriendsToTrip(
+          tripId: trip.id,
+          friendIds: friendIds,
+          inviterName: _currentUser!.name,
+        );
+      }
+
+      // Start the trip
+      await _convoyService.startTrip(trip.id);
+
+      if (mounted) {
+        // Show success message
+        showCupertinoDialog(
+          context: context,
+          barrierDismissible: true,
+          builder: (context) => CupertinoAlertDialog(
+            title: const Text('🚗 Drive Party Created!'),
+            content: Text(
+              friendIds.isEmpty
+                  ? 'Your drive party is active. You can invite friends later from the convoy screen.'
+                  : 'Drive party created and ${friendIds.length} friend(s) invited!',
+            ),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        showCupertinoDialog(
+          context: context,
+          builder: (context) => CupertinoAlertDialog(
+            title: const Text('Error'),
+            content: Text('Failed to create drive party: $e'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  Duration _parseDuration(String text) {
+    // Parse "X min" or "X h Y min" format
+    final parts = text.split(' ');
+    int hours = 0;
+    int minutes = 0;
+
+    for (int i = 0; i < parts.length; i++) {
+      if (parts[i] == 'h' && i > 0) {
+        hours = int.tryParse(parts[i - 1]) ?? 0;
+      } else if (parts[i] == 'min' && i > 0) {
+        minutes = int.tryParse(parts[i - 1]) ?? 0;
+      }
+    }
+
+    return Duration(hours: hours, minutes: minutes);
+  }
+
+  double _parseDistance(String text) {
+    // Parse "X km" or "X.Y km" format
+    final match = RegExp(r'([\d.]+)').firstMatch(text);
+    if (match != null) {
+      return (double.tryParse(match.group(1) ?? '0') ?? 0) *
+          1000; // Convert to meters
+    }
+    return 0;
+  }
+
+  void _beginNavigation() {
+    if (_selectedRoute == null) return;
+
     setState(() {
       _isNavigating = true;
     });
@@ -187,7 +679,8 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _selectedRoute!.durationText,
     );
 
-    // Start position tracking
+    // Start position tracking (cancel any existing subscription first)
+    _positionSubscription?.cancel();
     _positionSubscription = _locationService
         .getPositionStream(accuracy: LocationAccuracy.high, distanceFilter: 10)
         .listen(_handlePositionUpdate);
@@ -196,15 +689,53 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _navigationTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _checkNavigationState();
     });
+
+    // Update trip location if drive party is active
+    if (_activeTrip != null) {
+      Timer.periodic(const Duration(seconds: 30), (_) async {
+        if (_currentPosition != null && _activeTrip != null) {
+          await _convoyService.updateParticipantLocation(
+            tripId: _activeTrip!.id,
+            userId: _currentUser!.id,
+            position: _currentPosition!,
+          );
+        }
+      });
+
+      // Listen to status updates
+      _listenToStatusUpdates();
+    }
   }
 
   void _stopNavigation() {
     setState(() {
       _isNavigating = false;
     });
-    _positionSubscription?.cancel();
+
+    // Cancel navigation-specific subscriptions and timers
     _navigationTimer?.cancel();
     _voiceService.stop();
+
+    // Keep position tracking if live location is enabled, otherwise cancel it
+    if (!_liveLocationEnabled) {
+      _positionSubscription?.cancel();
+    } else {
+      // Restart with lighter updates for route planning mode
+      _positionSubscription?.cancel();
+      _positionSubscription = _locationService
+          .getPositionStream(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+          )
+          .listen((position) {
+            if (!mounted) return;
+            setState(() {
+              _currentPosition = position;
+              _currentSpeed = position.speed * 3.6;
+              _isMoving = position.speed > 0.28;
+            });
+          });
+    }
   }
 
   void _handlePositionUpdate(Position position) {
@@ -215,12 +746,18 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _currentSpeed = position.speed * 3.6; // Convert m/s to km/h
       // Character is moving if speed is above 1 km/h (approx 0.28 m/s)
       _isMoving = position.speed > 0.28;
+      _currentHeading = position.heading;
     });
 
     // Live location updates handled by location sharing service
 
-    // Update map position
-    _mapController.move(LatLng(position.latitude, position.longitude), 17.0);
+    // Update map position and rotation - road points upward
+    final center = LatLng(position.latitude, position.longitude);
+    _mapController.moveAndRotate(
+      center,
+      18.5, // Increased zoom for better visibility
+      -position.heading, // Rotate map so travel direction points up
+    );
 
     // Check if off route
     final isOff = _navigationService.isOffRoute(
@@ -395,26 +932,44 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
   }
 
-  void _handleArrival() {
+  Future<void> _handleArrival() async {
     _voiceService.announceArrival();
     _stopNavigation();
 
-    showCupertinoDialog(
-      context: context,
-      builder: (context) => CupertinoAlertDialog(
-        title: const Text('Arrived'),
-        content: Text('You have arrived at ${widget.destinationName}'),
-        actions: [
-          CupertinoDialogAction(
-            child: const Text('OK'),
-            onPressed: () {
-              Navigator.pop(context); // Close dialog
-              Navigator.pop(context); // Go to home
-            },
+    // Complete drive party if active
+    if (_activeTrip != null) {
+      final stats = {
+        'totalDistance': _activeTrip!.totalDistance,
+        'duration': DateTime.now()
+            .difference(_activeTrip!.startedAt ?? DateTime.now())
+            .inMinutes,
+        'participants': _activeTrip!.participants
+            .where((p) => p.status == ParticipantStatus.active)
+            .length,
+      };
+      await _convoyService.completeTrip(_activeTrip!.id, stats);
+    }
+
+    if (mounted) {
+      showCupertinoDialog(
+        context: context,
+        builder: (context) => CupertinoAlertDialog(
+          title: const Text('🎉 Arrived!'),
+          content: Text(
+            'You have arrived at ${widget.destinationName}${_activeTrip != null ? '\n\nDrive party completed!' : ''}',
           ),
-        ],
-      ),
-    );
+          actions: [
+            CupertinoDialogAction(
+              child: const Text('OK'),
+              onPressed: () {
+                Navigator.pop(context); // Close dialog
+                Navigator.pop(context); // Go to home
+              },
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   void _showError(String message) {
@@ -435,113 +990,155 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(
-        middle: Text(_isNavigating ? 'Navigating' : 'Route Planning'),
-        leading: CupertinoButton(
-          padding: EdgeInsets.zero,
-          child: const Icon(CupertinoIcons.back),
-          onPressed: () {
-            if (_isNavigating) {
-              _showExitConfirmation();
-            } else {
-              Navigator.pop(context);
-            }
-          },
-        ),
-        trailing: _isNavigating
-            ? CupertinoButton(
-                padding: EdgeInsets.zero,
-                child: Icon(
-                  _voiceEnabled
-                      ? CupertinoIcons.speaker_2_fill
-                      : CupertinoIcons.speaker_slash_fill,
-                ),
-                onPressed: () {
-                  setState(() {
-                    _voiceEnabled = !_voiceEnabled;
-                    _voiceService.setEnabled(_voiceEnabled);
-                  });
-                },
-              )
-            : null,
-      ),
-      child: _isLoading
-          ? const Center(child: CupertinoActivityIndicator())
-          : Stack(
-              children: [
-                // Map
-                FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: _currentPosition != null
-                        ? LatLng(
-                            _currentPosition!.latitude,
-                            _currentPosition!.longitude,
-                          )
-                        : widget.destination,
-                    initialZoom: _isNavigating ? 17.0 : 13.0,
-                    minZoom: 10.0,
-                    maxZoom: 19.0,
-                    interactionOptions: const InteractionOptions(
-                      flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-                    ),
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-                      subdomains: const ['a', 'b', 'c', 'd'],
-                      userAgentPackageName: 'com.roadmobile.app',
-                      retinaMode: true,
-                      keepBuffer:
-                          2, // Reduced from 8 to 2 for better performance
-                      maxNativeZoom: 19,
-                      maxZoom: 19,
-                      panBuffer:
-                          1, // Reduced from 2 to 1 for better performance
-                      tileProvider: NetworkTileProvider(),
-                      tileDisplay: const TileDisplay.fadeIn(
-                        duration: Duration(milliseconds: 100),
-                      ),
-                    ),
-                    // Route polylines
-                    if (_selectedRoute != null && !_isNavigating)
-                      ..._buildRoutePolylines(),
-                    // Active route during navigation
-                    if (_selectedRoute != null && _isNavigating)
-                      PolylineLayer(
-                        polylines: [
-                          Polyline(
-                            points: _selectedRoute!.polyline,
-                            strokeWidth: 6.0,
-                            color: CupertinoColors.systemBlue,
-                            borderStrokeWidth: 2.0,
-                            borderColor: CupertinoColors.white,
+    return GestureDetector(
+      onHorizontalDragEnd: (details) {
+        // Don't handle gestures when chat is open
+        if (_showChat) return;
+
+        // Enable swipe back gesture
+        if (details.primaryVelocity != null && details.primaryVelocity! > 0) {
+          if (_isNavigating) {
+            _showExitConfirmation();
+          } else {
+            Navigator.of(context).maybePop();
+          }
+        }
+      },
+      child: CupertinoPageScaffold(
+        navigationBar: CupertinoNavigationBar(
+          middle: Text(_isNavigating ? 'Navigating' : 'Route Planning'),
+          leading: CupertinoButton(
+            padding: EdgeInsets.zero,
+            child: const Icon(CupertinoIcons.back),
+            onPressed: () {
+              if (_isNavigating) {
+                _showExitConfirmation();
+              } else {
+                Navigator.pop(context);
+              }
+            },
+          ),
+          trailing: _isNavigating
+              ? _activeTrip != null
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CupertinoButton(
+                            padding: EdgeInsets.zero,
+                            child: Icon(
+                              _voiceEnabled
+                                  ? CupertinoIcons.speaker_2_fill
+                                  : CupertinoIcons.speaker_slash_fill,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _voiceEnabled = !_voiceEnabled;
+                                _voiceService.setEnabled(_voiceEnabled);
+                              });
+                            },
+                          ),
+                          CupertinoButton(
+                            padding: EdgeInsets.zero,
+                            child: const Icon(CupertinoIcons.ellipsis_circle),
+                            onPressed: _showStatusPicker,
                           ),
                         ],
+                      )
+                    : CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        child: Icon(
+                          _voiceEnabled
+                              ? CupertinoIcons.speaker_2_fill
+                              : CupertinoIcons.speaker_slash_fill,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _voiceEnabled = !_voiceEnabled;
+                            _voiceService.setEnabled(_voiceEnabled);
+                          });
+                        },
+                      )
+              : null,
+        ),
+        child: _isLoading
+            ? const Center(child: CupertinoActivityIndicator())
+            : Stack(
+                children: [
+                  // Map
+                  FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter: _currentPosition != null
+                          ? LatLng(
+                              _currentPosition!.latitude,
+                              _currentPosition!.longitude,
+                            )
+                          : widget.destination,
+                      initialZoom: _isNavigating ? 18.5 : 13.0,
+                      minZoom: 10.0,
+                      maxZoom: 19.0,
+                      interactionOptions: InteractionOptions(
+                        flags: _isNavigating
+                            ? InteractiveFlag.all & ~InteractiveFlag.rotate
+                            : InteractiveFlag.all,
                       ),
-                    // Risk point markers
-                    if (_selectedRoute != null)
-                      MarkerLayer(markers: _buildRiskMarkers()),
-                    // Post markers
-                    MarkerLayer(markers: _buildPostMarkers()),
-                    // Live user markers
-                    MarkerLayer(markers: _buildLiveUserMarkers()),
-                    // Destination marker
-                    MarkerLayer(markers: [_buildDestinationMarker()]),
-                    // Current position marker
-                    if (_currentPosition != null)
-                      MarkerLayer(markers: [_buildCurrentPositionMarker()]),
-                  ],
-                ),
-                // Route selection panel (when not navigating)
-                if (!_isNavigating && _routes != null)
-                  _buildRouteSelectionPanel(),
-                // Navigation info panel (when navigating)
-                if (_isNavigating) _buildNavigationInfoPanel(),
-              ],
-            ),
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+                        subdomains: const ['a', 'b', 'c', 'd'],
+                        userAgentPackageName: 'com.roadmobile.app',
+                        retinaMode: true,
+                        keepBuffer:
+                            2, // Reduced from 8 to 2 for better performance
+                        maxNativeZoom: 19,
+                        maxZoom: 19,
+                        panBuffer:
+                            1, // Reduced from 2 to 1 for better performance
+                        tileProvider: NetworkTileProvider(),
+                        tileDisplay: const TileDisplay.fadeIn(
+                          duration: Duration(milliseconds: 100),
+                        ),
+                      ),
+                      // Route polylines
+                      if (_selectedRoute != null && !_isNavigating)
+                        ..._buildRoutePolylines(),
+                      // Active route during navigation
+                      if (_selectedRoute != null && _isNavigating)
+                        PolylineLayer(
+                          polylines: [
+                            Polyline(
+                              points: _selectedRoute!.polyline,
+                              strokeWidth: 6.0,
+                              color: CupertinoColors.systemBlue,
+                              borderStrokeWidth: 2.0,
+                              borderColor: CupertinoColors.white,
+                            ),
+                          ],
+                        ),
+                      // Risk point markers
+                      if (_selectedRoute != null)
+                        MarkerLayer(markers: _buildRiskMarkers()),
+                      // Post markers
+                      MarkerLayer(markers: _buildPostMarkers()),
+                      // Live user markers
+                      MarkerLayer(markers: _buildLiveUserMarkers()),
+                      // Destination marker
+                      MarkerLayer(markers: [_buildDestinationMarker()]),
+                      // Current position marker (blue dot or character)
+                      if (_currentPosition != null)
+                        MarkerLayer(markers: [_buildCurrentPositionMarker()]),
+                    ],
+                  ),
+                  // Route selection panel (when not navigating)
+                  if (!_isNavigating && _routes != null)
+                    _buildRouteSelectionPanel(),
+                  // Navigation info panel (when navigating)
+                  if (_isNavigating) _buildNavigationInfoPanel(),
+                ],
+              ),
+      ),
     );
   }
 
@@ -650,11 +1247,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   Marker _buildCurrentPositionMarker() {
-    // Show character avatar only if live sharing is enabled AND currently navigating
-    if (_liveLocationEnabled &&
-        _isNavigating &&
-        _currentUser != null &&
-        _currentUser!.selectedCharacter != null) {
+    // Show character avatar if user has one selected (during navigation or when live sharing)
+    if (_currentUser != null &&
+        _currentUser!.selectedCharacter != null &&
+        _liveLocationEnabled) {
       final character = Character.getAllCharacters().firstWhere(
         (c) => c.id == _currentUser!.selectedCharacter,
         orElse: () => Character.getAllCharacters().first,
@@ -668,6 +1264,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
         width: 120,
         height: 120,
         alignment: Alignment.center,
+        rotate: false, // Rotate with map during navigation
         child: AnimatedCharacterMarker(
           key: ValueKey(_currentUser!.selectedCharacter),
           actions: character.actions,
@@ -679,12 +1276,13 @@ class _NavigationScreenState extends State<NavigationScreen> {
       );
     }
 
-    // Default blue dot
+    // Default blue dot with direction indicator
     return Marker(
       point: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
       width: 50,
       height: 50,
       alignment: Alignment.center,
+      rotate: false, // Rotate with map during navigation
       child: Stack(
         alignment: Alignment.center,
         children: [
@@ -697,7 +1295,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
               shape: BoxShape.circle,
             ),
           ),
-          // Inner solid circle
+          // Inner solid circle with direction indicator
           Container(
             width: 16,
             height: 16,
@@ -714,6 +1312,16 @@ class _NavigationScreenState extends State<NavigationScreen> {
               ],
             ),
           ),
+          // Direction arrow (only during navigation) - points up
+          if (_isNavigating)
+            const Positioned(
+              top: 5,
+              child: Icon(
+                CupertinoIcons.arrowtriangle_up_fill,
+                color: CupertinoColors.systemBlue,
+                size: 16,
+              ),
+            ),
         ],
       ),
     );
@@ -776,39 +1384,65 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   List<Marker> _buildLiveUserMarkers() {
     return _liveUsers.map((userLoc) {
+      // Show animated character if user has one selected
+      if (userLoc.selectedCharacter != null) {
+        final character = Character.getAllCharacters().firstWhere(
+          (c) => c.id == userLoc.selectedCharacter!,
+          orElse: () => Character.getAllCharacters().first,
+        );
+
+        final isLancer = character.name.toLowerCase() == 'lancer';
+        final scale = isLancer ? 1.4 : 1.0;
+
+        // Determine if user is moving (speed > 1 km/h)
+        final isMoving = (userLoc.speed ?? 0) > 0.28; // 0.28 m/s = ~1 km/h
+
+        return Marker(
+          point: LatLng(userLoc.latitude, userLoc.longitude),
+          width: 120,
+          height: 120,
+          alignment: Alignment.center,
+          child: AnimatedCharacterMarker(
+            key: ValueKey(userLoc.userId),
+            actions: character.actions,
+            userName: userLoc.userName,
+            enableClick: false,
+            scale: scale,
+            isMoving: isMoving,
+          ),
+        );
+      }
+
+      // Default fallback for users without characters
       return Marker(
         point: LatLng(userLoc.latitude, userLoc.longitude),
-        width: 40,
-        height: 40,
+        width: 50,
+        height: 50,
         alignment: Alignment.center,
         child: Container(
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            border: Border.all(color: CupertinoColors.systemBlue, width: 2),
+            color: CupertinoColors.systemBlue,
+            border: Border.all(color: CupertinoColors.white, width: 3),
             boxShadow: [
               BoxShadow(
                 color: CupertinoColors.systemBlue.withOpacity(0.4),
-                blurRadius: 6,
+                blurRadius: 8,
+                spreadRadius: 2,
               ),
             ],
           ),
-          child: ClipOval(
-            child: userLoc.selectedCharacter != null
-                ? Image.asset(
-                    Character.getAllCharacters()
-                        .firstWhere((c) => c.id == userLoc.selectedCharacter!)
-                        .idleAction
-                        .assetPath,
-                    fit: BoxFit.cover,
-                  )
-                : Container(
-                    color: CupertinoColors.systemGrey,
-                    child: const Icon(
-                      CupertinoIcons.person_fill,
-                      size: 20,
-                      color: CupertinoColors.white,
-                    ),
-                  ),
+          child: Center(
+            child: Text(
+              userLoc.userName.isNotEmpty
+                  ? userLoc.userName[0].toUpperCase()
+                  : '?',
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: CupertinoColors.white,
+              ),
+            ),
           ),
         ),
       );
@@ -828,200 +1462,205 @@ class _NavigationScreenState extends State<NavigationScreen> {
             color: CupertinoColors.systemBackground,
             borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
           ),
-          child: ListView(
+          child: SingleChildScrollView(
             controller: scrollController,
             physics: const ClampingScrollPhysics(),
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(context).padding.bottom + 16,
-            ),
-            children: [
-              // Drag handle
-              Center(
-                child: Container(
-                  margin: const EdgeInsets.only(top: 8, bottom: 4),
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: CupertinoColors.systemGrey4,
-                    borderRadius: BorderRadius.circular(2),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Drag handle
+                Center(
+                  child: Container(
+                    margin: const EdgeInsets.only(top: 8, bottom: 4),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: CupertinoColors.systemGrey4,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
                 ),
-              ),
-              // Destination info
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: CupertinoColors.systemRed.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(
-                        CupertinoIcons.placemark_fill,
-                        color: CupertinoColors.systemRed,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Destination',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: CupertinoColors.secondaryLabel,
-                            ),
-                          ),
-                          Text(
-                            widget.destinationName,
-                            style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Container(height: 1, color: CupertinoColors.separator),
-              // Route options
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: Column(
-                  children: _routes!.asMap().entries.map((entry) {
-                    final index = entry.key;
-                    final route = entry.value;
-                    final isSelected = index == _selectedRouteIndex;
-
-                    return GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          _selectedRouteIndex = index;
-                          _selectedRoute = route;
-                        });
-                      },
-                      child: Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.all(12),
+                // Destination info
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
                         decoration: BoxDecoration(
-                          color: isSelected
-                              ? CupertinoColors.systemBlue.withOpacity(0.1)
-                              : CupertinoColors.systemGrey6,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isSelected
-                                ? CupertinoColors.systemBlue
-                                : CupertinoColors.systemGrey6,
-                            width: 2,
-                          ),
+                          color: CupertinoColors.systemRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Row(
+                        child: const Icon(
+                          CupertinoIcons.placemark_fill,
+                          color: CupertinoColors.systemRed,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Route type icon
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: _getRouteTypeColor(
-                                  route.type,
-                                ).withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Icon(
-                                _getRouteTypeIcon(route.type),
-                                color: _getRouteTypeColor(route.type),
-                                size: 20,
+                            const Text(
+                              'Destination',
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: CupertinoColors.secondaryLabel,
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    _getRouteTypeName(route.type),
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                      color: isSelected
-                                          ? CupertinoColors.systemBlue
-                                          : CupertinoColors.label,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    route.summary,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      color: CupertinoColors.secondaryLabel,
-                                    ),
-                                  ),
-                                ],
+                            Text(
+                              widget.destinationName,
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w600,
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Text(
-                                  route.durationText,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                Text(
-                                  route.distanceText,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    color: CupertinoColors.secondaryLabel,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                _buildSafetyBadge(route.safetyScore),
-                              ],
                             ),
                           ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ),
-              // Start navigation button
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                child: CupertinoButton(
-                  color: CupertinoColors.systemBlue,
-                  borderRadius: BorderRadius.circular(12),
-                  onPressed: _startNavigation,
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        CupertinoIcons.location_fill,
-                        color: CupertinoColors.white,
-                      ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Start Navigation',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: CupertinoColors.white,
                         ),
                       ),
                     ],
                   ),
                 ),
-              ),
-            ],
+                Container(height: 1, color: CupertinoColors.separator),
+                // Route options
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Column(
+                    children: _routes!.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final route = entry.value;
+                      final isSelected = index == _selectedRouteIndex;
+
+                      return GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _selectedRouteIndex = index;
+                            _selectedRoute = route;
+                          });
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? CupertinoColors.systemBlue.withOpacity(0.1)
+                                : CupertinoColors.systemGrey6,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: isSelected
+                                  ? CupertinoColors.systemBlue
+                                  : CupertinoColors.systemGrey6,
+                              width: 2,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              // Route type icon
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: _getRouteTypeColor(
+                                    route.type,
+                                  ).withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  _getRouteTypeIcon(route.type),
+                                  color: _getRouteTypeColor(route.type),
+                                  size: 20,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _getRouteTypeName(route.type),
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: isSelected
+                                            ? CupertinoColors.systemBlue
+                                            : CupertinoColors.label,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      route.summary,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: CupertinoColors.secondaryLabel,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    route.durationText,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    route.distanceText,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      color: CupertinoColors.secondaryLabel,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  _buildSafetyBadge(route.safetyScore),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+                // Start navigation button
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    8,
+                    16,
+                    MediaQuery.of(context).padding.bottom + 16,
+                  ),
+                  child: CupertinoButton(
+                    color: CupertinoColors.systemBlue,
+                    borderRadius: BorderRadius.circular(12),
+                    onPressed: _startNavigation,
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          CupertinoIcons.location_fill,
+                          color: CupertinoColors.white,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Start Navigation',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w600,
+                            color: CupertinoColors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -1031,8 +1670,41 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Widget _buildNavigationInfoPanel() {
     return Stack(
       children: [
-        // Turn instruction at top
-        if (_currentSegment != null && _distanceToNextInstruction != null)
+        // Combined instruction/status box at top (if drive party is active and chat is hidden)
+        if (_activeTrip != null && !_showChat)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              bottom: false,
+              child: Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: CupertinoColors.systemBackground,
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: CupertinoColors.black.withValues(alpha: 0.1),
+                      blurRadius: 10,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: _showingStatus && _currentStatusDisplay != null
+                      ? _buildStatusContent()
+                      : _buildDirectionContent(),
+                ),
+              ),
+            ),
+          ),
+        // Turn instruction only (if no drive party or chat is shown)
+        if (_activeTrip == null &&
+            _currentSegment != null &&
+            _distanceToNextInstruction != null)
           Positioned(
             top: 0,
             left: 0,
@@ -1099,6 +1771,34 @@ class _NavigationScreenState extends State<NavigationScreen> {
               ),
             ),
           ),
+        // Chat panel (overlay when toggled)
+        if (_showChat && _activeTrip != null)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragEnd: (_) {}, // Absorb horizontal gestures
+              child: SafeArea(
+                child: Container(
+                  margin: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: CupertinoColors.black.withValues(alpha: 0.3),
+                        blurRadius: 20,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: _buildChatPanel(),
+                ),
+              ),
+            ),
+          ),
         // Bottom controls
         Positioned(
           bottom: 0,
@@ -1151,13 +1851,20 @@ class _NavigationScreenState extends State<NavigationScreen> {
                       padding: EdgeInsets.zero,
                       onPressed: () {
                         if (_currentPosition != null) {
-                          _mapController.move(
-                            LatLng(
-                              _currentPosition!.latitude,
-                              _currentPosition!.longitude,
-                            ),
-                            17.0,
+                          // Focus on character position
+                          final center = LatLng(
+                            _currentPosition!.latitude,
+                            _currentPosition!.longitude,
                           );
+                          if (_isNavigating) {
+                            _mapController.moveAndRotate(
+                              center,
+                              18.5,
+                              -_currentHeading,
+                            );
+                          } else {
+                            _mapController.move(center, 17.0);
+                          }
                         }
                       },
                       child: Container(
@@ -1184,41 +1891,47 @@ class _NavigationScreenState extends State<NavigationScreen> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // Voice toggle
-                    CupertinoButton(
-                      padding: EdgeInsets.zero,
-                      onPressed: () {
-                        setState(() {
-                          _voiceEnabled = !_voiceEnabled;
-                        });
-                      },
-                      child: Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: CupertinoColors.systemBackground,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: CupertinoColors.black.withValues(
-                                alpha: 0.15,
+                    // Chat toggle button (only if drive party is active)
+                    if (_activeTrip != null) ...[
+                      CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        onPressed: () {
+                          setState(() {
+                            _showChat = !_showChat;
+                          });
+                        },
+                        child: Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: _showChat
+                                ? CupertinoColors.systemPurple
+                                : CupertinoColors.systemBackground,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: _showChat
+                                    ? CupertinoColors.systemPurple.withValues(
+                                        alpha: 0.4,
+                                      )
+                                    : CupertinoColors.black.withValues(
+                                        alpha: 0.15,
+                                      ),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
                               ),
-                              blurRadius: 8,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Icon(
-                          _voiceEnabled
-                              ? CupertinoIcons.speaker_2_fill
-                              : CupertinoIcons.speaker_slash_fill,
-                          color: _voiceEnabled
-                              ? CupertinoColors.systemBlue
-                              : CupertinoColors.systemGrey,
-                          size: 22,
+                            ],
+                          ),
+                          child: Icon(
+                            CupertinoIcons.chat_bubble_2_fill,
+                            color: _showChat
+                                ? CupertinoColors.white
+                                : CupertinoColors.systemPurple,
+                            size: 22,
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                     const Spacer(),
                     // Stop navigation button
                     CupertinoButton(
@@ -1488,5 +2201,721 @@ class _NavigationScreenState extends State<NavigationScreen> {
         ],
       ),
     );
+  }
+
+  void _showStatusPicker() {
+    showCupertinoModalPopup(
+      context: context,
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(5),
+        child: CupertinoActionSheet(
+          title: const Text('Convoy Actions'),
+          message: const Text('Update status or manage trip'),
+          actions: [
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                _postStatus(StatusType.restStop);
+              },
+              child: const Text('🅿 Rest Stop'),
+            ),
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                _postStatus(StatusType.toilet);
+              },
+              child: const Text('🚻 Toilet Break'),
+            ),
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                _postStatus(StatusType.fuel);
+              },
+              child: const Text('⛽ Fuel Stop'),
+            ),
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                _postStatus(StatusType.eating);
+              },
+              child: const Text('🍔 Food Break'),
+            ),
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                _postStatus(StatusType.issue);
+              },
+              child: const Text('⚠️ Having Issues'),
+            ),
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                _postStatus(StatusType.resumeTrip);
+              },
+              child: const Text('🚙 Resume Trip'),
+            ),
+            CupertinoActionSheetAction(
+              isDestructiveAction: true,
+              onPressed: () {
+                Navigator.pop(context);
+                _showCompleteConfirmation();
+              },
+              child: const Text('🏁 Complete Trip'),
+            ),
+          ],
+          cancelButton: CupertinoActionSheetAction(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showCompleteConfirmation() {
+    showCupertinoDialog(
+      context: context,
+      builder: (context) => CupertinoAlertDialog(
+        title: const Text('Complete Trip'),
+        content: const Text(
+          'Are you sure you want to complete this drive party? This will end the convoy for all participants.',
+        ),
+        actions: [
+          CupertinoDialogAction(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.pop(context),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            onPressed: () async {
+              Navigator.pop(context);
+              await _manuallyCompleteTrip();
+            },
+            child: const Text('Complete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _manuallyCompleteTrip() async {
+    if (_activeTrip == null) return;
+
+    final stats = {
+      'totalDistance': _activeTrip!.totalDistance,
+      'duration': _activeTrip!.startedAt != null
+          ? DateTime.now().difference(_activeTrip!.startedAt!).inMinutes
+          : 0,
+      'participants': _activeTrip!.participants
+          .where((p) => p.status == ParticipantStatus.active)
+          .length,
+    };
+
+    try {
+      await _convoyService.completeTrip(_activeTrip!.id, stats);
+
+      if (mounted) {
+        showCupertinoDialog(
+          context: context,
+          barrierDismissible: true,
+          builder: (context) {
+            Future.delayed(const Duration(seconds: 2), () {
+              if (mounted) Navigator.of(context, rootNavigator: true).pop();
+            });
+
+            return Center(
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 40),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 16,
+                ),
+                decoration: BoxDecoration(
+                  color: CupertinoColors.systemBackground,
+                  borderRadius: const BorderRadius.all(Radius.circular(16)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: CupertinoColors.black.withValues(alpha: 0.3),
+                      blurRadius: 20,
+                    ),
+                  ],
+                ),
+                child: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      CupertinoIcons.checkmark_circle_fill,
+                      color: CupertinoColors.systemGreen,
+                      size: 48,
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      'Drive Party Completed!',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+
+        setState(() {
+          _activeTrip = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        showCupertinoDialog(
+          context: context,
+          builder: (context) => CupertinoAlertDialog(
+            title: const Text('Error'),
+            content: Text('Failed to complete trip: $e'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _postStatus(StatusType type) async {
+    if (_activeTrip == null ||
+        _currentPosition == null ||
+        _currentUser == null) {
+      return;
+    }
+
+    try {
+      print('📝 Posting status: ${type.name}');
+      await _convoyService.postStatusUpdate(
+        tripId: _activeTrip!.id,
+        userId: _currentUser!.id,
+        userName: _currentUser!.name,
+        type: type,
+        location: LatLng(
+          _currentPosition!.latitude,
+          _currentPosition!.longitude,
+        ),
+      );
+      print('✅ Status posted successfully');
+    } catch (e) {
+      print('❌ Error posting status: $e');
+      if (mounted) {
+        showCupertinoDialog(
+          context: context,
+          builder: (context) => CupertinoAlertDialog(
+            title: const Text('Error'),
+            content: Text('Failed to update status: $e'),
+            actions: [
+              CupertinoDialogAction(
+                child: const Text('OK'),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      }
+    }
+  }
+
+  Widget _buildStatusContent() {
+    if (_currentStatusDisplay == null) return const SizedBox();
+
+    return Row(
+      key: const ValueKey('status'),
+      children: [
+        Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: CupertinoColors.systemPurple.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Center(
+            child: Text(
+              _currentStatusDisplay!.displayText.split(' ')[0],
+              style: const TextStyle(fontSize: 28),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _currentStatusDisplay!.userName,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                _currentStatusDisplay!.displayText.replaceAll(
+                  RegExp(r'^[^\w\s]+\s*'),
+                  '',
+                ),
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: CupertinoColors.secondaryLabel,
+                ),
+              ),
+            ],
+          ),
+        ),
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _showingStatus = false;
+            });
+            _statusDisplayTimer?.cancel();
+          },
+          child: const Icon(
+            CupertinoIcons.xmark_circle_fill,
+            color: CupertinoColors.systemGrey3,
+            size: 24,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDirectionContent() {
+    if (_currentSegment == null || _distanceToNextInstruction == null) {
+      return Row(
+        key: const ValueKey('no-direction'),
+        children: [
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: CupertinoColors.systemGrey5,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              CupertinoIcons.location,
+              color: CupertinoColors.systemGrey,
+              size: 28,
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text(
+              'Following route...',
+              style: TextStyle(
+                fontSize: 17,
+                color: CupertinoColors.secondaryLabel,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      key: const ValueKey('direction'),
+      children: [
+        Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: CupertinoColors.systemBlue.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(
+            CupertinoIcons.arrow_up,
+            color: CupertinoColors.systemBlue,
+            size: 28,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _distanceToNextInstruction! < 1000
+                    ? '${_distanceToNextInstruction!.toInt()} m'
+                    : '${(_distanceToNextInstruction! / 1000).toStringAsFixed(1)} km',
+                style: const TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                _currentSegment!.instruction,
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: CupertinoColors.secondaryLabel,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _listenToStatusUpdates() {
+    if (_activeTrip == null) {
+      print('⚠️ Cannot listen to status updates: no active trip');
+      return;
+    }
+
+    print('👂 Listening to status updates for trip: ${_activeTrip!.id}');
+
+    // Cancel existing subscription
+    _statusSubscription?.cancel();
+
+    _statusSubscription = _convoyService
+        .getStatusUpdates(_activeTrip!.id)
+        .listen(
+          (updates) {
+            print('🔔 Received ${updates.length} status updates');
+            print('   Current _showingStatus: $_showingStatus');
+            print(
+              '   Current _currentStatusDisplay: ${_currentStatusDisplay?.id}',
+            );
+
+            if (updates.isEmpty) {
+              print('   ℹ️ No status updates yet');
+              return;
+            }
+
+            if (!mounted) {
+              print('   ⚠️ Widget not mounted, ignoring');
+              return;
+            }
+
+            final latestStatus = updates.first;
+            print(
+              '   Latest status: ${latestStatus.displayText} by ${latestStatus.userName} (${latestStatus.id})',
+            );
+
+            // Only show if it's a new status
+            if (_currentStatusDisplay == null ||
+                _currentStatusDisplay!.id != latestStatus.id) {
+              print('   ✨ Displaying new status!');
+
+              setState(() {
+                _currentStatusDisplay = latestStatus;
+                _showingStatus = true;
+              });
+
+              print('   After setState: _showingStatus = $_showingStatus');
+
+              // Cancel existing timer
+              _statusDisplayTimer?.cancel();
+
+              // Switch back to directions after 5 seconds
+              _statusDisplayTimer = Timer(const Duration(seconds: 5), () {
+                print('   ⏰ Timer expired, hiding status');
+                if (mounted) {
+                  setState(() {
+                    _showingStatus = false;
+                  });
+                }
+              });
+            } else {
+              print('   ℹ️ Status already displayed, skipping');
+            }
+          },
+          onError: (error) {
+            print('❌ Status stream error: $error');
+          },
+        );
+  }
+
+  Widget _buildChatPanel() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        color: CupertinoColors.systemBackground,
+        child: Column(
+          children: [
+            // Chat header
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: const BoxDecoration(
+                color: CupertinoColors.systemBackground,
+                border: Border(
+                  bottom: BorderSide(
+                    color: CupertinoColors.separator,
+                    width: 0.5,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    CupertinoIcons.chat_bubble_2_fill,
+                    color: CupertinoColors.systemPurple,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Convoy Chat',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: () {
+                      setState(() {
+                        _showChat = false;
+                      });
+                    },
+                    child: const Icon(
+                      CupertinoIcons.xmark_circle_fill,
+                      color: CupertinoColors.systemGrey,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Messages
+            Expanded(
+              child: StreamBuilder<List<TripMessage>>(
+                stream: _convoyService.getMessages(_activeTrip!.id),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CupertinoActivityIndicator());
+                  }
+
+                  final messages = snapshot.data ?? [];
+
+                  if (messages.isEmpty) {
+                    return const Center(
+                      child: Text(
+                        'No messages yet\nStart the conversation!',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: CupertinoColors.secondaryLabel),
+                      ),
+                    );
+                  }
+
+                  // Scroll to bottom when messages change
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (_chatScrollController.hasClients) {
+                      _chatScrollController.jumpTo(
+                        _chatScrollController.position.maxScrollExtent,
+                      );
+                    }
+                  });
+
+                  return ListView.builder(
+                    controller: _chatScrollController,
+                    physics: const AlwaysScrollableScrollPhysics(
+                      parent: BouncingScrollPhysics(),
+                    ),
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final message = messages[index];
+                      final isCurrentUser =
+                          message.senderId == _currentUser?.id;
+                      final isSystem = message.type == MessageType.systemAlert;
+                      final isFirstMessage = index == 0;
+
+                      if (isSystem) {
+                        return Center(
+                          child: Container(
+                            margin: EdgeInsets.only(
+                              top: isFirstMessage ? 4 : 8,
+                              bottom: 8,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: CupertinoColors.systemGrey5,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              message.content ?? '',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: CupertinoColors.secondaryLabel,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return Align(
+                        alignment: isCurrentUser
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: Container(
+                          margin: EdgeInsets.only(
+                            top: isFirstMessage ? 4 : 0,
+                            bottom: 8,
+                          ),
+                          padding: const EdgeInsets.all(12),
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.of(context).size.width * 0.65,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isCurrentUser
+                                ? CupertinoColors.systemPurple
+                                : CupertinoColors.systemGrey5,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (!isCurrentUser)
+                                Text(
+                                  message.senderName,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: isCurrentUser
+                                        ? CupertinoColors.white.withValues(
+                                            alpha: 0.8,
+                                          )
+                                        : CupertinoColors.secondaryLabel,
+                                  ),
+                                ),
+                              if (!isCurrentUser) const SizedBox(height: 2),
+                              Text(
+                                message.content ?? '',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: isCurrentUser
+                                      ? CupertinoColors.white
+                                      : CupertinoColors.label,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+            // Message input
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: const BoxDecoration(
+                color: CupertinoColors.systemBackground,
+                border: Border(
+                  top: BorderSide(color: CupertinoColors.separator, width: 0.5),
+                ),
+              ),
+              child: Row(
+                children: [
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: _sendPhotoMessage,
+                    child: const Icon(CupertinoIcons.camera, size: 24),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: CupertinoTextField(
+                      controller: _chatController,
+                      placeholder: 'Type a message...',
+                      maxLines: 3,
+                      minLines: 1,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: _sendTextMessage,
+                    child: const Icon(
+                      CupertinoIcons.arrow_up_circle_fill,
+                      color: CupertinoColors.systemPurple,
+                      size: 32,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _sendTextMessage() async {
+    if (_activeTrip == null ||
+        _chatController.text.trim().isEmpty ||
+        _currentUser == null) {
+      return;
+    }
+
+    try {
+      await _convoyService.sendMessage(
+        tripId: _activeTrip!.id,
+        senderId: _currentUser!.id,
+        senderName: _currentUser!.name,
+        type: MessageType.text,
+        content: _chatController.text.trim(),
+      );
+      _chatController.clear();
+
+      // Scroll to bottom
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (_chatScrollController.hasClients) {
+          _chatScrollController.animateTo(
+            _chatScrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    } catch (e) {
+      print('Error sending message: $e');
+    }
+  }
+
+  Future<void> _sendPhotoMessage() async {
+    if (_activeTrip == null || _currentUser == null) return;
+
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(source: ImageSource.camera);
+
+    if (image != null) {
+      try {
+        await _convoyService.sendMessage(
+          tripId: _activeTrip!.id,
+          senderId: _currentUser!.id,
+          senderName: _currentUser!.name,
+          type: MessageType.photo,
+          content: image.path,
+        );
+
+        // Scroll to bottom
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (_chatScrollController.hasClients) {
+            _chatScrollController.animateTo(
+              _chatScrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 300),
+              curve: Curves.easeOut,
+            );
+          }
+        });
+      } catch (e) {
+        print('Error sending photo: $e');
+      }
+    }
   }
 }
