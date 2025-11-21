@@ -55,6 +55,8 @@ class Post {
   final int inaccuracyReports; // Count of users reporting this post as inaccurate
   final List<String> reportedBy; // User IDs who reported this as inaccurate
   final bool? isRoadDamage; // Detected via accelerometer
+  final bool isSponsored; // Sponsored/Ad post
+  final String? sponsorAdId; // Link to ad if sponsored
 
   Post({
     required this.id,
@@ -77,6 +79,8 @@ class Post {
     this.inaccuracyReports = 0,
     this.reportedBy = const [],
     this.isRoadDamage,
+    this.isSponsored = false,
+    this.sponsorAdId,
   });
 
   Map<String, dynamic> toMap() {
@@ -101,6 +105,8 @@ class Post {
       'inaccuracyReports': inaccuracyReports,
       'reportedBy': reportedBy,
       'isRoadDamage': isRoadDamage,
+      'isSponsored': isSponsored,
+      'sponsorAdId': sponsorAdId,
     };
   }
 
@@ -134,6 +140,8 @@ class Post {
       inaccuracyReports: map['inaccuracyReports'] ?? 0,
       reportedBy: List<String>.from(map['reportedBy'] ?? []),
       isRoadDamage: map['isRoadDamage'],
+      isSponsored: map['isSponsored'] ?? false,
+      sponsorAdId: map['sponsorAdId'],
     );
   }
 
@@ -158,6 +166,8 @@ class Post {
     int? inaccuracyReports,
     List<String>? reportedBy,
     bool? isRoadDamage,
+    bool? isSponsored,
+    String? sponsorAdId,
   }) {
     return Post(
       id: id ?? this.id,
@@ -180,6 +190,8 @@ class Post {
       inaccuracyReports: inaccuracyReports ?? this.inaccuracyReports,
       reportedBy: reportedBy ?? this.reportedBy,
       isRoadDamage: isRoadDamage ?? this.isRoadDamage,
+      isSponsored: isSponsored ?? this.isSponsored,
+      sponsorAdId: sponsorAdId ?? this.sponsorAdId,
     );
   }
 }

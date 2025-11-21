@@ -17,10 +17,11 @@ import '../services/analytics_service.dart' hide RiskLevel;
 import '../services/road_damage_service.dart';
 import '../services/location_sharing_service.dart';
 import '../services/session_service.dart';
+import '../services/ad_service.dart';
+import '../services/premium_service.dart';
 import '../widgets/animated_character_marker.dart';
 import 'auth_screen.dart';
 import 'forum_screen.dart';
-import 'debug_screen.dart';
 import 'post_detail_screen.dart';
 import 'create_post_screen.dart';
 import 'historical_data_screen.dart';
@@ -28,6 +29,7 @@ import 'friends_screen.dart';
 import 'shop_screen.dart';
 import 'destination_search_screen.dart';
 import 'convoy_list_screen.dart';
+import '../models/ad.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -51,6 +53,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final LocationSharingService _locationSharingService =
       LocationSharingService();
   final SessionService _sessionService = SessionService();
+  final AdService _adService = AdService();
+  final PremiumService _premiumService = PremiumService();
   final ChatGPTService? _chatGPTService = ChatGPTService(
     apiKey:
         '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',
@@ -69,6 +73,9 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Marker>? _cachedEmergencyMarkers;
   List<Marker>? _cachedDangerPointMarkers; // AI-detected danger points
   List<CircleMarker>? _cachedHeatmapCircles;
+  List<Ad>? _nearbyMapAds;  // Make nullable to avoid undefined issues
+  bool _isPremiumUser = false;
+  Timer? _adRefreshTimer;
   District? _currentDistrict;
   String? _stateFilter;
   String? _districtSummary;
@@ -103,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _startRoadDamageDetection();
     _startGPSStatusUpdates();
     _locationSharingService.startCleanupTimer();
+    _checkPremiumAndLoadAds();
   }
 
   @override
@@ -114,6 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _locationSharingService.dispose();
     _gpsUpdateTimer?.cancel();
     _locationShareTimer?.cancel();
+    _adRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -253,6 +262,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   15.0,
                 );
                 unawaited(_syncStateFilterWithPosition(position));
+                // Load map ads now that we have position
+                unawaited(_loadNearbyMapAds());
               }
 
               // Share location if enabled
@@ -1202,6 +1213,265 @@ class _HomeScreenState extends State<HomeScreen> {
         .toList();
   }
 
+  /// Check premium status and load map ads
+  Future<void> _checkPremiumAndLoadAds() async {
+    try {
+      if (_currentUser == null) return;
+      
+      final isPremium = await _premiumService.isPremiumUser(_currentUser!.id);
+      if (!mounted) return;
+      
+      setState(() => _isPremiumUser = isPremium);
+      
+      if (!isPremium) {
+        print('HomeScreen: User is not premium, loading map ads');
+        unawaited(_loadNearbyMapAds());
+        
+        // Refresh ads every 30 seconds
+        _adRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+          if (mounted) _loadNearbyMapAds();
+        });
+      } else {
+        print('HomeScreen: User is premium, no map ads will be shown');
+      }
+    } catch (e) {
+      print('Error checking premium status for ads: $e');
+    }
+  }
+  
+  /// Load nearby map logo ads
+  Future<void> _loadNearbyMapAds() async {
+    try {
+      if (_currentUserPosition == null || _isPremiumUser) {
+        print('HomeScreen: Cannot load map ads - position: ${_currentUserPosition != null}, premium: $_isPremiumUser');
+        return;
+      }
+      
+      print('HomeScreen: Loading map ads at (${_currentUserPosition!.latitude}, ${_currentUserPosition!.longitude})');
+      
+      final ads = await _adService.getNearbyAds(
+        _currentUserPosition!.latitude,
+        _currentUserPosition!.longitude,
+        type: AdType.mapLogo,
+      );
+      
+      print('HomeScreen: Found ${ads.length} map logo ads');
+      
+      if (mounted) {
+        setState(() {
+          _nearbyMapAds = ads;
+        });
+      }
+    } catch (e) {
+      print('Error loading map ads: $e');
+    }
+  }
+  
+  /// Build map logo ad markers (styled like posts)
+  List<Marker> _buildMapAdMarkers() {
+    try {
+      if (_isPremiumUser) return [];
+      
+      final ads = _nearbyMapAds;
+      if (ads == null) return [];
+      if (ads.isEmpty) return [];
+      
+      final markers = <Marker>[];
+      
+      for (final ad in ads) {
+        if (ad.latitude == null || ad.longitude == null) continue;
+        
+        // Style like posts: 32x32 circular markers
+        markers.add(Marker(
+          point: LatLng(ad.latitude!, ad.longitude!),
+          width: 32,
+          height: 32,
+          child: GestureDetector(
+            onTap: () {
+              try {
+                _adService.recordClick(ad.id);
+                _showMapAdDetail(ad);
+              } catch (e) {
+                print('Error handling ad tap: $e');
+              }
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                // Yellow/gold color for ads to distinguish from posts
+                color: const Color(0xFFFFB800),
+                shape: BoxShape.circle,
+                border: Border.all(color: CupertinoColors.white, width: 2.5),
+                boxShadow: [
+                  BoxShadow(
+                    color: CupertinoColors.black.withValues(alpha: 0.25),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                    spreadRadius: 0,
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Icon(
+                  CupertinoIcons.money_dollar_circle_fill,
+                  color: CupertinoColors.white,
+                  size: 14,
+                ),
+              ),
+            ),
+          ),
+        ));
+      }
+      
+      return markers;
+    } catch (e) {
+      print('Error building map ad markers: $e');
+      return [];
+    }
+  }
+  
+  /// Show map ad detail popup
+  void _showMapAdDetail(Ad ad) {
+    try {
+      // Record impression when detail is shown
+      _adService.recordImpression(ad.id);
+    
+    showCupertinoModalPopup(
+      context: context,
+      builder: (context) => CupertinoActionSheet(
+        title: Text(ad.merchantName),
+        message: Column(
+          children: [
+            if (ad.imageUrl != null) ...[
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  ad.imageUrl!,
+                  height: 200,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) => Container(
+                    height: 200,
+                    color: CupertinoColors.systemGrey6,
+                    child: const Icon(
+                      CupertinoIcons.photo,
+                      size: 50,
+                      color: CupertinoColors.systemGrey,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              ad.title,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(ad.content),
+            if (ad.merchantAddress != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    CupertinoIcons.location_fill,
+                    size: 16,
+                    color: CupertinoColors.systemGrey,
+                  ),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      ad.merchantAddress!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: CupertinoColors.secondaryLabel,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (ad.merchantPhone != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    CupertinoIcons.phone_fill,
+                    size: 16,
+                    color: CupertinoColors.systemGrey,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    ad.merchantPhone!,
+                    style: const TextStyle(
+                      color: CupertinoColors.secondaryLabel,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 8),
+          ],
+        ),
+        actions: [
+          if (ad.latitude != null && ad.longitude != null)
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                // Center map on ad location
+                _mapController.move(
+                  LatLng(ad.latitude!, ad.longitude!),
+                  16.0,
+                );
+              },
+              child: const Text('View Location'),
+            ),
+          if (ad.merchantPhone != null)
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                // In a real app, this would open phone dialer
+                showCupertinoDialog(
+                  context: context,
+                  builder: (context) => CupertinoAlertDialog(
+                    title: const Text('Call Merchant'),
+                    content: Text('Call ${ad.merchantPhone}?'),
+                    actions: [
+                      CupertinoDialogAction(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                      CupertinoDialogAction(
+                        isDefaultAction: true,
+                        onPressed: () {
+                          Navigator.pop(context);
+                          // TODO: Implement actual phone call
+                        },
+                        child: const Text('Call'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+              child: const Text('Call'),
+            ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ),
+    );
+    } catch (e) {
+      print('Error showing map ad detail: $e');
+    }
+  }
+
   /// Build danger point markers based on AI analysis (high risk posts)
   List<Marker> _buildDangerPointMarkers() {
     if (!_showDangerPoints) return [];
@@ -1326,29 +1596,14 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           },
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CupertinoButton(
-              padding: EdgeInsets.zero,
-              child: const Icon(CupertinoIcons.info_circle),
-              onPressed: () {
-                Navigator.of(context).push(
-                  CupertinoPageRoute(builder: (context) => const DebugScreen()),
-                );
-              },
-            ),
-            const SizedBox(width: 4),
-            CupertinoButton(
-              padding: EdgeInsets.zero,
-              child: Icon(
-                _currentUser == null
-                    ? CupertinoIcons.person_crop_circle_badge_plus
-                    : CupertinoIcons.person_crop_circle_fill,
-              ),
-              onPressed: _handleProfileButton,
-            ),
-          ],
+        trailing: CupertinoButton(
+          padding: EdgeInsets.zero,
+          child: Icon(
+            _currentUser == null
+                ? CupertinoIcons.person_crop_circle_badge_plus
+                : CupertinoIcons.person_crop_circle_fill,
+          ),
+          onPressed: _handleProfileButton,
         ),
       ),
       child: _isLoading
@@ -1415,6 +1670,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     MarkerLayer(markers: _buildEmergencyMarkers()),
                     // District markers (forums)
                     MarkerLayer(markers: _buildDistrictMarkers()),
+                    // Map logo ads (if not premium)
+                    if (!_isPremiumUser && _nearbyMapAds != null && _nearbyMapAds!.isNotEmpty)
+                      MarkerLayer(markers: _buildMapAdMarkers()),
                     // Other users markers with animated characters
                     MarkerLayer(markers: _otherUserMarkers),
                     // User location marker (always on top)

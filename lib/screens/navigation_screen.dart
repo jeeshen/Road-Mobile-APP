@@ -21,7 +21,12 @@ import '../models/trip_status_update.dart';
 import '../models/trip_message.dart';
 import '../services/convoy_service.dart';
 import '../services/friend_service.dart';
+import '../services/ad_service.dart';
+import '../services/premium_service.dart';
+import '../models/ad.dart';
+import '../widgets/ad_banner_widget.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 class NavigationScreen extends StatefulWidget {
   final LatLng destination;
@@ -46,6 +51,127 @@ class NavigationScreen extends StatefulWidget {
   State<NavigationScreen> createState() => _NavigationScreenState();
 }
 
+class _VoiceAdPopup extends StatelessWidget {
+  final Ad ad;
+  final VoidCallback onDismiss;
+
+  const _VoiceAdPopup({
+    required this.ad,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: CupertinoColors.systemBackground.resolveFrom(context),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: CupertinoColors.black.withValues(alpha: 0.15),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: CupertinoColors.systemBlue.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                CupertinoIcons.speaker_2_fill,
+                color: CupertinoColors.systemBlue,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: CupertinoColors.systemGrey5
+                              .resolveFrom(context),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          'Voice Ad',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: CupertinoColors.systemGrey,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          ad.merchantName,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: CupertinoColors.systemGrey,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    ad.title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    ad.content,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: CupertinoColors.secondaryLabel,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            CupertinoButton(
+              padding: EdgeInsets.zero,
+              onPressed: onDismiss,
+              child: const Icon(
+                CupertinoIcons.xmark_circle_fill,
+                color: CupertinoColors.systemGrey,
+                size: 20,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _NavigationScreenState extends State<NavigationScreen> {
   final nav_service.NavigationService _navigationService =
       nav_service.NavigationService();
@@ -54,6 +180,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
   final MapController _mapController = MapController();
   final ConvoyService _convoyService = ConvoyService();
   final FriendService _friendService = FriendService();
+  final AdService _adService = AdService();
+  final PremiumService _premiumService = PremiumService();
+  final FlutterTts _tts = FlutterTts();
 
   List<nav_service.NavigationRoute>? _routes;
   nav_service.NavigationRoute? _selectedRoute;
@@ -80,6 +209,35 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Timer? _statusDisplayTimer;
   bool _showingStatus = false;
   StreamSubscription<List<TripStatusUpdate>>? _statusSubscription;
+  
+  // Notification system
+  Set<String> _seenPostIds = {};
+  Set<String> _notifiedPostIds = {};
+  Timer? _notificationCheckTimer;
+  Post? _currentNotification;
+  Timer? _notificationDisplayTimer;
+  
+  // Ad system
+  bool _isPremiumUser = false;
+  Ad? _currentBannerAd;
+  bool _showBannerAd = false;
+  Ad? _currentVoiceAd;
+  bool _showVoiceAdPopup = false;
+  Set<String> _shownAdIds = {};
+  Timer? _adCheckTimer;
+  Timer? _voicePopupTimer;
+  List<Ad> _nearbyAds = [];
+  DateTime? _navigationStartTime;
+
+  static const Duration _voiceAdDelay = Duration(seconds: 5);
+
+  double get _bannerOffsetHeight =>
+      (_showBannerAd && _currentBannerAd != null && !_isPremiumUser) ? 100 : 0;
+
+  double get _voiceAdOffsetHeight =>
+      (_showVoiceAdPopup && _currentVoiceAd != null && !_isPremiumUser) ? 100 : 0;
+
+  double get _adOverlayHeight => _bannerOffsetHeight + _voiceAdOffsetHeight;
 
   @override
   void initState() {
@@ -96,6 +254,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
     _loadLiveUsers();
     _loadCurrentUser();
+    _checkPremiumStatus();
   }
 
   void _setupExistingTrip() {
@@ -238,14 +397,124 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
   }
 
+  Future<void> _checkPremiumStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userId = prefs.getString('current_user_id');
+    if (userId != null) {
+      final isPremium = await _premiumService.isPremiumUser(userId);
+      setState(() => _isPremiumUser = isPremium);
+      
+      if (!isPremium) {
+        print('NavigationScreen: User is not premium, will check for ads');
+        // Check for ads immediately
+        _checkForNearbyAds();
+        
+        // Start checking for nearby ads periodically
+        _adCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+          _checkForNearbyAds();
+        });
+      } else {
+        print('NavigationScreen: User is premium, no ads will be shown');
+      }
+    }
+  }
+
+  Future<void> _checkForNearbyAds() async {
+    if (_currentPosition == null || _isPremiumUser) {
+      print('NavigationScreen: Cannot check ads - position: ${_currentPosition != null}, premium: $_isPremiumUser');
+      return;
+    }
+
+    print('NavigationScreen: Checking for ads at (${_currentPosition!.latitude}, ${_currentPosition!.longitude})');
+    
+    final ads = await _adService.getNearbyAds(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+    );
+
+    print('NavigationScreen: Found ${ads.length} nearby ads');
+    setState(() => _nearbyAds = ads);
+
+    // Show banner ad if available and not already showing
+    if (!_showBannerAd && ads.isNotEmpty) {
+      final bannerAd = _adService.getNextAd(ads, AdType.banner);
+      if (bannerAd != null && !_shownAdIds.contains(bannerAd.id)) {
+        print('NavigationScreen: Showing banner ad: ${bannerAd.title}');
+        setState(() {
+          _currentBannerAd = bannerAd;
+          _showBannerAd = true;
+          _shownAdIds.add(bannerAd.id);
+        });
+
+        // Auto-hide after 8 seconds
+        Future.delayed(const Duration(seconds: 8), () {
+          if (mounted) {
+            print('NavigationScreen: Auto-hiding banner ad');
+            setState(() => _showBannerAd = false);
+          }
+        });
+      } else {
+        print('NavigationScreen: No banner ad to show (bannerAd: $bannerAd, already shown: ${bannerAd != null ? _shownAdIds.contains(bannerAd.id) : "N/A"})');
+      }
+    } else {
+      print('NavigationScreen: Not showing banner ad (already showing: $_showBannerAd, ads available: ${ads.length})');
+    }
+
+    final bool canPlayVoiceAd = _isNavigating &&
+        _voiceEnabled &&
+        _navigationStartTime != null &&
+        DateTime.now().difference(_navigationStartTime!) >= _voiceAdDelay;
+
+    // Play voice ad if available (only during active navigation after delay)
+    if (canPlayVoiceAd && ads.isNotEmpty) {
+      final voiceAd = _adService.getNextAd(ads, AdType.voice);
+      if (voiceAd != null && !_shownAdIds.contains(voiceAd.id)) {
+        print('NavigationScreen: Playing voice ad: ${voiceAd.title}');
+        _shownAdIds.add(voiceAd.id);
+        await _playVoiceAd(voiceAd);
+      }
+    }
+  }
+
+  Future<void> _playVoiceAd(Ad ad) async {
+    if (!mounted) return;
+
+    setState(() {
+      _currentVoiceAd = ad;
+      _showVoiceAdPopup = true;
+    });
+
+    _voicePopupTimer?.cancel();
+    _voicePopupTimer = Timer(const Duration(seconds: 12), () {
+      if (mounted && _currentVoiceAd?.id == ad.id) {
+        setState(() => _showVoiceAdPopup = false);
+      }
+    });
+
+    try {
+      await _tts.setLanguage('en-US');
+      await _tts.setPitch(1.0);
+      await _tts.setSpeechRate(0.4);
+      await _tts.speak(ad.voiceScript ?? ad.content);
+      await _adService.recordImpression(ad.id);
+    } catch (e) {
+      print('Error playing voice ad: $e');
+    }
+  }
+
   @override
   void dispose() {
     _positionSubscription?.cancel();
     _liveUsersSubscription?.cancel();
     _navigationTimer?.cancel();
+    _notificationCheckTimer?.cancel();
+    _notificationDisplayTimer?.cancel();
     _statusDisplayTimer?.cancel();
     _statusSubscription?.cancel();
+    _adCheckTimer?.cancel();
+    _voicePopupTimer?.cancel();
     _voiceService.dispose();
+    _tts.stop();
     _chatController.dispose();
     _chatScrollController.dispose();
     super.dispose();
@@ -671,7 +940,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
     setState(() {
       _isNavigating = true;
+      _navigationStartTime = DateTime.now();
     });
+
+    // Initialize seen posts with current posts
+    _seenPostIds = widget.allPosts.map((p) => p.id).toSet();
 
     // Announce navigation start
     _voiceService.announceNavigationStart(
@@ -688,6 +961,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
     // Start navigation monitoring
     _navigationTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _checkNavigationState();
+    });
+
+    // Start notification checking
+    _notificationCheckTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _checkForNotifications();
     });
 
     // Update trip location if drive party is active
@@ -710,10 +988,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
   void _stopNavigation() {
     setState(() {
       _isNavigating = false;
+      _showVoiceAdPopup = false;
+      _navigationStartTime = null;
     });
 
     // Cancel navigation-specific subscriptions and timers
     _navigationTimer?.cancel();
+    _notificationCheckTimer?.cancel();
+    _notificationDisplayTimer?.cancel();
     _voiceService.stop();
 
     // Keep position tracking if live location is enabled, otherwise cancel it
@@ -860,6 +1142,199 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
   }
 
+  /// Check for notifications: new road conditions, accidents on route, traffic jams
+  void _checkForNotifications() {
+    if (_currentPosition == null || _selectedRoute == null || !_isNavigating) {
+      return;
+    }
+
+    final currentLatLng = LatLng(
+      _currentPosition!.latitude,
+      _currentPosition!.longitude,
+    );
+
+    // 1. Check for new road conditions in the region (within 5km)
+    for (final post in widget.allPosts) {
+      if (_notifiedPostIds.contains(post.id)) continue;
+
+      // Check if post is new (not in seen posts)
+      final isNewPost = !_seenPostIds.contains(post.id);
+      
+      if (post.latitude != null && post.longitude != null) {
+        final distance = Geolocator.distanceBetween(
+          currentLatLng.latitude,
+          currentLatLng.longitude,
+          post.latitude!,
+          post.longitude!,
+        );
+
+        // New road condition in region (within 5km)
+        if (isNewPost && distance < 5000) {
+          _showNotification(post, 'New road condition in your area');
+          _seenPostIds.add(post.id);
+          _notifiedPostIds.add(post.id);
+          continue;
+        }
+
+        // 2. Check for accidents on the followed route (within 1km of route)
+        if (post.category == PostCategory.accident && 
+            _isPostOnRoute(post, _selectedRoute!.polyline)) {
+          final routeDistance = _getDistanceToRoute(post, _selectedRoute!.polyline);
+          if (routeDistance < 1000) {
+            _showNotification(post, 'Accident on your route');
+            _notifiedPostIds.add(post.id);
+            continue;
+          }
+        }
+
+        // 3. Check for traffic jams on frequently used routes (within 2km)
+        if (post.category == PostCategory.trafficJam && distance < 2000) {
+          _showNotification(post, 'Traffic jam nearby');
+          _notifiedPostIds.add(post.id);
+          continue;
+        }
+      }
+    }
+
+    // Update seen posts
+    _seenPostIds = widget.allPosts.map((p) => p.id).toSet();
+  }
+
+  /// Check if a post is on or near the route
+  bool _isPostOnRoute(Post post, List<LatLng> route) {
+    if (post.latitude == null || post.longitude == null) return false;
+    if (route.isEmpty) return false;
+
+    final distanceToRoute = _getDistanceToRoute(post, route);
+    
+    // Consider post "on route" if within 500m
+    return distanceToRoute < 500;
+  }
+
+  /// Calculate minimum distance from post to route
+  double _getDistanceToRoute(Post post, List<LatLng> route) {
+    if (post.latitude == null || post.longitude == null) return double.infinity;
+    if (route.isEmpty) return double.infinity;
+
+    final postLocation = LatLng(post.latitude!, post.longitude!);
+    double minDistance = double.infinity;
+
+    // Check distance to each segment of the route
+    for (int i = 0; i < route.length - 1; i++) {
+      final segmentStart = route[i];
+      final segmentEnd = route[i + 1];
+      
+      // Calculate distance to line segment
+      final distance = _pointToLineSegmentDistance(
+        postLocation,
+        segmentStart,
+        segmentEnd,
+      );
+      
+      if (distance < minDistance) {
+        minDistance = distance;
+      }
+    }
+
+    return minDistance;
+  }
+
+  /// Calculate distance from point to line segment
+  double _pointToLineSegmentDistance(LatLng point, LatLng lineStart, LatLng lineEnd) {
+    final A = point.latitude - lineStart.latitude;
+    final B = point.longitude - lineStart.longitude;
+    final C = lineEnd.latitude - lineStart.latitude;
+    final D = lineEnd.longitude - lineStart.longitude;
+
+    final dot = A * C + B * D;
+    final lenSq = C * C + D * D;
+    double param = -1;
+    
+    if (lenSq != 0) {
+      param = dot / lenSq;
+    }
+
+    double xx, yy;
+
+    if (param < 0) {
+      xx = lineStart.latitude;
+      yy = lineStart.longitude;
+    } else if (param > 1) {
+      xx = lineEnd.latitude;
+      yy = lineEnd.longitude;
+    } else {
+      xx = lineStart.latitude + param * C;
+      yy = lineStart.longitude + param * D;
+    }
+    
+    // Convert to meters
+    return Geolocator.distanceBetween(
+      point.latitude,
+      point.longitude,
+      xx,
+      yy,
+    );
+  }
+
+  /// Show notification in convoy status area
+  void _showNotification(Post post, String notificationType) {
+    if (_notifiedPostIds.contains(post.id)) return;
+    
+    // Don't show if already showing a status or notification
+    if (_showingStatus && _currentStatusDisplay != null) return;
+    if (_currentNotification != null) return;
+
+    setState(() {
+      _currentNotification = post;
+      _showingStatus = true;
+    });
+
+    // Auto-dismiss after 8 seconds
+    _notificationDisplayTimer?.cancel();
+    _notificationDisplayTimer = Timer(const Duration(seconds: 8), () {
+      if (mounted) {
+        setState(() {
+          _currentNotification = null;
+          _showingStatus = false;
+        });
+      }
+    });
+
+    // Voice alert using announceRiskPoint if it's a risk-related post
+    if (_voiceEnabled && post.riskLevel != null) {
+      final distance = post.latitude != null && post.longitude != null
+          ? Geolocator.distanceBetween(
+              _currentPosition!.latitude,
+              _currentPosition!.longitude,
+              post.latitude!,
+              post.longitude!,
+            )
+          : null;
+      
+      if (distance != null && distance < 2000) {
+        // Create a risk point for voice announcement
+        final riskPoint = nav_service.RiskPoint(
+          location: LatLng(post.latitude!, post.longitude!),
+          level: post.riskLevel == RiskLevel.critical
+              ? nav_service.NavRiskLevel.critical
+              : post.riskLevel == RiskLevel.high
+                  ? nav_service.NavRiskLevel.high
+                  : post.riskLevel == RiskLevel.medium
+                      ? nav_service.NavRiskLevel.medium
+                      : nav_service.NavRiskLevel.low,
+          description: post.content,
+          type: post.category == PostCategory.accident
+              ? 'accident'
+              : post.category == PostCategory.trafficJam
+                  ? 'traffic'
+                  : 'general',
+          timestamp: post.createdAt,
+        );
+        _voiceService.announceRiskPoint(riskPoint, distance);
+      }
+    }
+  }
+
   final Set<String> _announcedPosts = {};
 
   void _showNearbyPostAlert(Post post, double distance) {
@@ -867,34 +1342,31 @@ class _NavigationScreenState extends State<NavigationScreen> {
     if (_announcedPosts.contains(post.id)) return;
     _announcedPosts.add(post.id);
 
-    // Show alert banner
-    if (mounted) {
-      showCupertinoDialog(
-        context: context,
-        barrierDismissible: true,
-        builder: (context) => CupertinoAlertDialog(
-          title: const Row(
-            children: [
-              Icon(
-                CupertinoIcons.exclamationmark_triangle,
-                color: CupertinoColors.systemOrange,
-                size: 20,
-              ),
-              SizedBox(width: 8),
-              Expanded(child: Text('Nearby Alert')),
-            ],
-          ),
-          content: Text(
-            '${distance.toInt()}m ahead: ${post.content.length > 80 ? '${post.content.substring(0, 80)}...' : post.content}',
-          ),
-          actions: [
-            CupertinoDialogAction(
-              child: const Text('OK'),
-              onPressed: () => Navigator.pop(context),
-            ),
-          ],
-        ),
+    // Show notification in convoy status area instead of dialog
+    if (_currentNotification == null && !_showingStatus) {
+      _showNotification(post, 'Nearby alert');
+    }
+
+    // Also show voice alert using announceRiskPoint if it's a risk-related post
+    if (_voiceEnabled && post.riskLevel != null && post.latitude != null && post.longitude != null) {
+      final riskPoint = nav_service.RiskPoint(
+        location: LatLng(post.latitude!, post.longitude!),
+        level: post.riskLevel == RiskLevel.critical
+            ? nav_service.NavRiskLevel.critical
+            : post.riskLevel == RiskLevel.high
+                ? nav_service.NavRiskLevel.high
+                : post.riskLevel == RiskLevel.medium
+                    ? nav_service.NavRiskLevel.medium
+                    : nav_service.NavRiskLevel.low,
+        description: post.content,
+        type: post.category == PostCategory.accident
+            ? 'accident'
+            : post.category == PostCategory.trafficJam
+                ? 'traffic'
+                : 'general',
+        timestamp: post.createdAt,
       );
+      _voiceService.announceRiskPoint(riskPoint, distance);
     }
   }
 
@@ -1122,6 +1594,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
                         MarkerLayer(markers: _buildRiskMarkers()),
                       // Post markers
                       MarkerLayer(markers: _buildPostMarkers()),
+                      // Merchant ad logo markers (if not premium)
+                      if (!_isPremiumUser)
+                        MarkerLayer(markers: _buildAdLogoMarkers()),
                       // Live user markers
                       MarkerLayer(markers: _buildLiveUserMarkers()),
                       // Destination marker
@@ -1366,6 +1841,140 @@ class _NavigationScreenState extends State<NavigationScreen> {
         .toList();
   }
 
+  List<Marker> _buildAdLogoMarkers() {
+    return _nearbyAds
+        .where((ad) =>
+            ad.type == AdType.mapLogo &&
+            ad.latitude != null &&
+            ad.longitude != null)
+        .map((ad) {
+          return Marker(
+            point: LatLng(ad.latitude!, ad.longitude!),
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            child: GestureDetector(
+              onTap: () async {
+                await _adService.recordClick(ad.id);
+                _showAdDetail(ad);
+              },
+              child: Container(
+                decoration: BoxDecoration(
+                  color: CupertinoColors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFF007AFF),
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: CupertinoColors.black.withOpacity(0.2),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: ad.logoUrl != null
+                    ? ClipOval(
+                        child: Image.network(
+                          ad.logoUrl!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Icon(
+                            CupertinoIcons.building_2_fill,
+                            color: Color(0xFF007AFF),
+                            size: 20,
+                          ),
+                        ),
+                      )
+                    : const Icon(
+                        CupertinoIcons.building_2_fill,
+                        color: Color(0xFF007AFF),
+                        size: 20,
+                      ),
+              ),
+            ),
+          );
+        })
+        .toList();
+  }
+
+  void _showAdDetail(Ad ad) {
+    showCupertinoModalPopup(
+      context: context,
+      builder: (context) => CupertinoActionSheet(
+        title: Text(ad.merchantName),
+        message: Column(
+          children: [
+            if (ad.imageUrl != null) ...[
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.network(
+                  ad.imageUrl!,
+                  height: 200,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text(ad.title,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                )),
+            const SizedBox(height: 8),
+            Text(ad.content),
+            if (ad.merchantAddress != null) ...[
+              const SizedBox(height: 8),
+              Text('📍 ${ad.merchantAddress}'),
+            ],
+            if (ad.merchantPhone != null) ...[
+              const SizedBox(height: 4),
+              Text('📞 ${ad.merchantPhone}'),
+            ],
+          ],
+        ),
+        actions: [
+          if (ad.latitude != null && ad.longitude != null)
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                // Navigate to merchant location
+                final destination = LatLng(ad.latitude!, ad.longitude!);
+                Navigator.push(
+                  context,
+                  CupertinoPageRoute(
+                    builder: (context) => NavigationScreen(
+                      destination: destination,
+                      destinationName: ad.merchantName,
+                      currentPosition: _currentPosition!,
+                      allPosts: widget.allPosts,
+                      districts: widget.districts,
+                    ),
+                  ),
+                );
+              },
+              child: const Text('Navigate Here'),
+            ),
+          if (ad.merchantPhone != null)
+            CupertinoActionSheetAction(
+              onPressed: () {
+                Navigator.pop(context);
+                // Call merchant (would integrate with phone dialer)
+              },
+              child: const Text('Call'),
+            ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ),
+    );
+  }
+
   void _showPostDetail(Post post) {
     showCupertinoDialog(
       context: context,
@@ -1383,7 +1992,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   List<Marker> _buildLiveUserMarkers() {
-    return _liveUsers.map((userLoc) {
+    final currentUserId = _currentUser?.id;
+    final visibleUsers = currentUserId == null
+        ? _liveUsers
+        : _liveUsers.where((user) => user.userId != currentUserId).toList();
+
+    return visibleUsers.map((userLoc) {
       // Show animated character if user has one selected
       if (userLoc.selectedCharacter != null) {
         final character = Character.getAllCharacters().firstWhere(
@@ -1670,10 +2284,42 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Widget _buildNavigationInfoPanel() {
     return Stack(
       children: [
+        // Ad banner at top (if not premium and ad available)
+        if (_showBannerAd && _currentBannerAd != null && !_isPremiumUser)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              bottom: false,
+              child: AdBannerWidget(
+                ad: _currentBannerAd!,
+                onDismiss: () => setState(() => _showBannerAd = false),
+              ),
+            ),
+          ),
+        // Voice ad popup (shown only during navigation voice ads)
+        if (_showVoiceAdPopup && _currentVoiceAd != null && !_isPremiumUser)
+          Positioned(
+            top: (_showBannerAd && _currentBannerAd != null && !_isPremiumUser)
+                ? 100
+                : 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              bottom: false,
+              child: _VoiceAdPopup(
+                ad: _currentVoiceAd!,
+                onDismiss: () {
+                  setState(() => _showVoiceAdPopup = false);
+                },
+              ),
+            ),
+          ),
         // Combined instruction/status box at top (if drive party is active and chat is hidden)
         if (_activeTrip != null && !_showChat)
           Positioned(
-            top: 0,
+            top: _adOverlayHeight,
             left: 0,
             right: 0,
             child: SafeArea(
@@ -1694,7 +2340,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                 ),
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 300),
-                  child: _showingStatus && _currentStatusDisplay != null
+                  child: _showingStatus && (_currentStatusDisplay != null || _currentNotification != null)
                       ? _buildStatusContent()
                       : _buildDirectionContent(),
                 ),
@@ -1706,7 +2352,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
             _currentSegment != null &&
             _distanceToNextInstruction != null)
           Positioned(
-            top: 0,
+            top: _adOverlayHeight,
             left: 0,
             right: 0,
             child: SafeArea(
@@ -2427,6 +3073,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   Widget _buildStatusContent() {
+    // Show notification if available, otherwise show status
+    if (_currentNotification != null) {
+      return _buildNotificationContent(_currentNotification!);
+    }
+    
     if (_currentStatusDisplay == null) return const SizedBox();
 
     return Row(
@@ -2477,6 +3128,118 @@ class _NavigationScreenState extends State<NavigationScreen> {
               _showingStatus = false;
             });
             _statusDisplayTimer?.cancel();
+          },
+          child: const Icon(
+            CupertinoIcons.xmark_circle_fill,
+            color: CupertinoColors.systemGrey3,
+            size: 24,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNotificationContent(Post post) {
+    // Determine notification type and color
+    Color notificationColor;
+    IconData notificationIcon;
+    String notificationTitle;
+
+    if (post.category == PostCategory.accident) {
+      notificationColor = CupertinoColors.systemRed;
+      notificationIcon = CupertinoIcons.exclamationmark_triangle_fill;
+      notificationTitle = 'Accident Alert';
+    } else if (post.category == PostCategory.trafficJam) {
+      notificationColor = CupertinoColors.systemOrange;
+      notificationIcon = CupertinoIcons.car_fill;
+      notificationTitle = 'Traffic Alert';
+    } else {
+      notificationColor = CupertinoColors.systemOrange;
+      notificationIcon = CupertinoIcons.info_circle_fill;
+      notificationTitle = 'Road Condition';
+    }
+
+    // Calculate distance if available
+    String distanceText = '';
+    if (post.latitude != null && post.longitude != null && _currentPosition != null) {
+      final distance = Geolocator.distanceBetween(
+        _currentPosition!.latitude,
+        _currentPosition!.longitude,
+        post.latitude!,
+        post.longitude!,
+      );
+      if (distance < 1000) {
+        distanceText = '${distance.toInt()}m away';
+      } else {
+        distanceText = '${(distance / 1000).toStringAsFixed(1)}km away';
+      }
+    }
+
+    return Row(
+      key: ValueKey('notification_${post.id}'),
+      children: [
+        Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: notificationColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(
+            notificationIcon,
+            color: notificationColor,
+            size: 28,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    notificationTitle,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: notificationColor,
+                    ),
+                  ),
+                  if (distanceText.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      distanceText,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: CupertinoColors.secondaryLabel,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 2),
+              Text(
+                post.content.length > 60
+                    ? '${post.content.substring(0, 60)}...'
+                    : post.content,
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: CupertinoColors.label,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _currentNotification = null;
+              _showingStatus = false;
+            });
+            _notificationDisplayTimer?.cancel();
           },
           child: const Icon(
             CupertinoIcons.xmark_circle_fill,
