@@ -13,8 +13,13 @@ import '../services/navigation_service.dart' as nav_service;
 import '../services/location_service.dart';
 import '../services/location_sharing_service.dart';
 import '../services/voice_alert_service.dart';
+import '../services/road_damage_service.dart';
+import '../services/firebase_service.dart';
+import '../services/chatgpt_service.dart';
+import '../services/nlp_service.dart';
 import '../widgets/animated_character_marker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/trip.dart';
 import '../models/trip_status_update.dart';
@@ -55,10 +60,7 @@ class _VoiceAdPopup extends StatelessWidget {
   final Ad ad;
   final VoidCallback onDismiss;
 
-  const _VoiceAdPopup({
-    required this.ad,
-    required this.onDismiss,
-  });
+  const _VoiceAdPopup({required this.ad, required this.onDismiss});
 
   @override
   Widget build(BuildContext context) {
@@ -105,8 +107,9 @@ class _VoiceAdPopup extends StatelessWidget {
                           vertical: 2,
                         ),
                         decoration: BoxDecoration(
-                          color: CupertinoColors.systemGrey5
-                              .resolveFrom(context),
+                          color: CupertinoColors.systemGrey5.resolveFrom(
+                            context,
+                          ),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: const Text(
@@ -183,6 +186,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
   final AdService _adService = AdService();
   final PremiumService _premiumService = PremiumService();
   final FlutterTts _tts = FlutterTts();
+  final RoadDamageService _roadDamageService = RoadDamageService();
+  final FirebaseService _firebaseService = FirebaseService();
+  final NLPService _nlpService = NLPService();
+  final ChatGPTService? _chatGPTService = ChatGPTService(
+    apiKey:
+        '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',
+  );
+  final Uuid _uuid = const Uuid();
 
   List<nav_service.NavigationRoute>? _routes;
   nav_service.NavigationRoute? _selectedRoute;
@@ -209,14 +220,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
   Timer? _statusDisplayTimer;
   bool _showingStatus = false;
   StreamSubscription<List<TripStatusUpdate>>? _statusSubscription;
-  
+
   // Notification system
   Set<String> _seenPostIds = {};
   Set<String> _notifiedPostIds = {};
   Timer? _notificationCheckTimer;
   Post? _currentNotification;
   Timer? _notificationDisplayTimer;
-  
+
   // Ad system
   bool _isPremiumUser = false;
   Ad? _currentBannerAd;
@@ -235,7 +246,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
       (_showBannerAd && _currentBannerAd != null && !_isPremiumUser) ? 100 : 0;
 
   double get _voiceAdOffsetHeight =>
-      (_showVoiceAdPopup && _currentVoiceAd != null && !_isPremiumUser) ? 100 : 0;
+      (_showVoiceAdPopup && _currentVoiceAd != null && !_isPremiumUser)
+      ? 100
+      : 0;
 
   double get _adOverlayHeight => _bannerOffsetHeight + _voiceAdOffsetHeight;
 
@@ -403,12 +416,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
     if (userId != null) {
       final isPremium = await _premiumService.isPremiumUser(userId);
       setState(() => _isPremiumUser = isPremium);
-      
+
       if (!isPremium) {
         print('NavigationScreen: User is not premium, will check for ads');
         // Check for ads immediately
         _checkForNearbyAds();
-        
+
         // Start checking for nearby ads periodically
         _adCheckTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
           _checkForNearbyAds();
@@ -421,12 +434,16 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   Future<void> _checkForNearbyAds() async {
     if (_currentPosition == null || _isPremiumUser) {
-      print('NavigationScreen: Cannot check ads - position: ${_currentPosition != null}, premium: $_isPremiumUser');
+      print(
+        'NavigationScreen: Cannot check ads - position: ${_currentPosition != null}, premium: $_isPremiumUser',
+      );
       return;
     }
 
-    print('NavigationScreen: Checking for ads at (${_currentPosition!.latitude}, ${_currentPosition!.longitude})');
-    
+    print(
+      'NavigationScreen: Checking for ads at (${_currentPosition!.latitude}, ${_currentPosition!.longitude})',
+    );
+
     final ads = await _adService.getNearbyAds(
       _currentPosition!.latitude,
       _currentPosition!.longitude,
@@ -454,13 +471,18 @@ class _NavigationScreenState extends State<NavigationScreen> {
           }
         });
       } else {
-        print('NavigationScreen: No banner ad to show (bannerAd: $bannerAd, already shown: ${bannerAd != null ? _shownAdIds.contains(bannerAd.id) : "N/A"})');
+        print(
+          'NavigationScreen: No banner ad to show (bannerAd: $bannerAd, already shown: ${bannerAd != null ? _shownAdIds.contains(bannerAd.id) : "N/A"})',
+        );
       }
     } else {
-      print('NavigationScreen: Not showing banner ad (already showing: $_showBannerAd, ads available: ${ads.length})');
+      print(
+        'NavigationScreen: Not showing banner ad (already showing: $_showBannerAd, ads available: ${ads.length})',
+      );
     }
 
-    final bool canPlayVoiceAd = _isNavigating &&
+    final bool canPlayVoiceAd =
+        _isNavigating &&
         _voiceEnabled &&
         _navigationStartTime != null &&
         DateTime.now().difference(_navigationStartTime!) >= _voiceAdDelay;
@@ -968,6 +990,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
       _checkForNotifications();
     });
 
+    // Start road damage detection during navigation
+    _roadDamageService.onRoadDamageDetected = (position, severity) {
+      _handleRoadDamageDetected(position, severity);
+    };
+    _roadDamageService.startMonitoring();
+
     // Update trip location if drive party is active
     if (_activeTrip != null) {
       Timer.periodic(const Duration(seconds: 30), (_) async {
@@ -997,6 +1025,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _notificationCheckTimer?.cancel();
     _notificationDisplayTimer?.cancel();
     _voiceService.stop();
+
+    // Stop road damage detection
+    _roadDamageService.stopMonitoring();
 
     // Keep position tracking if live location is enabled, otherwise cancel it
     if (!_liveLocationEnabled) {
@@ -1159,7 +1190,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
       // Check if post is new (not in seen posts)
       final isNewPost = !_seenPostIds.contains(post.id);
-      
+
       if (post.latitude != null && post.longitude != null) {
         final distance = Geolocator.distanceBetween(
           currentLatLng.latitude,
@@ -1177,9 +1208,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
         }
 
         // 2. Check for accidents on the followed route (within 1km of route)
-        if (post.category == PostCategory.accident && 
+        if (post.category == PostCategory.accident &&
             _isPostOnRoute(post, _selectedRoute!.polyline)) {
-          final routeDistance = _getDistanceToRoute(post, _selectedRoute!.polyline);
+          final routeDistance = _getDistanceToRoute(
+            post,
+            _selectedRoute!.polyline,
+          );
           if (routeDistance < 1000) {
             _showNotification(post, 'Accident on your route');
             _notifiedPostIds.add(post.id);
@@ -1200,13 +1234,85 @@ class _NavigationScreenState extends State<NavigationScreen> {
     _seenPostIds = widget.allPosts.map((p) => p.id).toSet();
   }
 
+  /// Handle road damage detection during navigation - automatically create post
+  Future<void> _handleRoadDamageDetected(
+    Position position,
+    double severity,
+  ) async {
+    // Find nearest district
+    final nearestDistrict = _locationService.findNearestDistrict(
+      position,
+      widget.districts,
+    );
+    if (nearestDistrict == null) return;
+
+    try {
+      // Generate AI content for the post
+      String title = 'Road Damage Detected';
+      String content =
+          'Road damage detected in ${nearestDistrict.name}. '
+          'Severity level: ${(severity * 100).toStringAsFixed(0)}%. '
+          'Please drive with caution in this area.';
+
+      final chatGPTService = _chatGPTService;
+      if (chatGPTService != null) {
+        try {
+          final aiReport = await chatGPTService.generateRoadDamageReport(
+            nearestDistrict.name,
+            nearestDistrict.state,
+            severity,
+            position.latitude,
+            position.longitude,
+          );
+          title = aiReport['title'] ?? title;
+          content = aiReport['content'] ?? content;
+        } catch (e) {
+          print('Error generating AI content: $e');
+          // Use fallback content
+        }
+      }
+
+      // Create post
+      final activeUserId = _currentUser?.id ?? 'guest_user';
+      final displayName = _currentUser?.name.isNotEmpty == true
+          ? _currentUser!.name
+          : 'Anonymous';
+
+      Post post = Post(
+        id: _uuid.v4(),
+        districtId: nearestDistrict.id,
+        userId: activeUserId,
+        username: displayName,
+        title: title,
+        content: content,
+        category: PostCategory.pothole,
+        mediaUrls: [],
+        createdAt: DateTime.now(),
+        latitude: position.latitude,
+        longitude: position.longitude,
+        isRoadDamage: true,
+      );
+
+      // Apply NLP analysis for auto-tagging and risk level
+      post = _nlpService.enhancePost(post);
+
+      // Save post to Firebase (no media files)
+      await _firebaseService.createPost(post, []);
+
+      print('Road damage post auto-created: ${post.id}');
+    } catch (e) {
+      print('Error auto-creating road damage post: $e');
+      // Silently fail - don't show any error to user
+    }
+  }
+
   /// Check if a post is on or near the route
   bool _isPostOnRoute(Post post, List<LatLng> route) {
     if (post.latitude == null || post.longitude == null) return false;
     if (route.isEmpty) return false;
 
     final distanceToRoute = _getDistanceToRoute(post, route);
-    
+
     // Consider post "on route" if within 500m
     return distanceToRoute < 500;
   }
@@ -1223,14 +1329,14 @@ class _NavigationScreenState extends State<NavigationScreen> {
     for (int i = 0; i < route.length - 1; i++) {
       final segmentStart = route[i];
       final segmentEnd = route[i + 1];
-      
+
       // Calculate distance to line segment
       final distance = _pointToLineSegmentDistance(
         postLocation,
         segmentStart,
         segmentEnd,
       );
-      
+
       if (distance < minDistance) {
         minDistance = distance;
       }
@@ -1240,7 +1346,11 @@ class _NavigationScreenState extends State<NavigationScreen> {
   }
 
   /// Calculate distance from point to line segment
-  double _pointToLineSegmentDistance(LatLng point, LatLng lineStart, LatLng lineEnd) {
+  double _pointToLineSegmentDistance(
+    LatLng point,
+    LatLng lineStart,
+    LatLng lineEnd,
+  ) {
     final A = point.latitude - lineStart.latitude;
     final B = point.longitude - lineStart.longitude;
     final C = lineEnd.latitude - lineStart.latitude;
@@ -1249,7 +1359,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
     final dot = A * C + B * D;
     final lenSq = C * C + D * D;
     double param = -1;
-    
+
     if (lenSq != 0) {
       param = dot / lenSq;
     }
@@ -1266,20 +1376,15 @@ class _NavigationScreenState extends State<NavigationScreen> {
       xx = lineStart.latitude + param * C;
       yy = lineStart.longitude + param * D;
     }
-    
+
     // Convert to meters
-    return Geolocator.distanceBetween(
-      point.latitude,
-      point.longitude,
-      xx,
-      yy,
-    );
+    return Geolocator.distanceBetween(point.latitude, point.longitude, xx, yy);
   }
 
   /// Show notification in convoy status area
   void _showNotification(Post post, String notificationType) {
     if (_notifiedPostIds.contains(post.id)) return;
-    
+
     // Don't show if already showing a status or notification
     if (_showingStatus && _currentStatusDisplay != null) return;
     if (_currentNotification != null) return;
@@ -1310,7 +1415,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
               post.longitude!,
             )
           : null;
-      
+
       if (distance != null && distance < 2000) {
         // Create a risk point for voice announcement
         final riskPoint = nav_service.RiskPoint(
@@ -1318,16 +1423,16 @@ class _NavigationScreenState extends State<NavigationScreen> {
           level: post.riskLevel == RiskLevel.critical
               ? nav_service.NavRiskLevel.critical
               : post.riskLevel == RiskLevel.high
-                  ? nav_service.NavRiskLevel.high
-                  : post.riskLevel == RiskLevel.medium
-                      ? nav_service.NavRiskLevel.medium
-                      : nav_service.NavRiskLevel.low,
+              ? nav_service.NavRiskLevel.high
+              : post.riskLevel == RiskLevel.medium
+              ? nav_service.NavRiskLevel.medium
+              : nav_service.NavRiskLevel.low,
           description: post.content,
           type: post.category == PostCategory.accident
               ? 'accident'
               : post.category == PostCategory.trafficJam
-                  ? 'traffic'
-                  : 'general',
+              ? 'traffic'
+              : 'general',
           timestamp: post.createdAt,
         );
         _voiceService.announceRiskPoint(riskPoint, distance);
@@ -1348,22 +1453,25 @@ class _NavigationScreenState extends State<NavigationScreen> {
     }
 
     // Also show voice alert using announceRiskPoint if it's a risk-related post
-    if (_voiceEnabled && post.riskLevel != null && post.latitude != null && post.longitude != null) {
+    if (_voiceEnabled &&
+        post.riskLevel != null &&
+        post.latitude != null &&
+        post.longitude != null) {
       final riskPoint = nav_service.RiskPoint(
         location: LatLng(post.latitude!, post.longitude!),
         level: post.riskLevel == RiskLevel.critical
             ? nav_service.NavRiskLevel.critical
             : post.riskLevel == RiskLevel.high
-                ? nav_service.NavRiskLevel.high
-                : post.riskLevel == RiskLevel.medium
-                    ? nav_service.NavRiskLevel.medium
-                    : nav_service.NavRiskLevel.low,
+            ? nav_service.NavRiskLevel.high
+            : post.riskLevel == RiskLevel.medium
+            ? nav_service.NavRiskLevel.medium
+            : nav_service.NavRiskLevel.low,
         description: post.content,
         type: post.category == PostCategory.accident
             ? 'accident'
             : post.category == PostCategory.trafficJam
-                ? 'traffic'
-                : 'general',
+            ? 'traffic'
+            : 'general',
         timestamp: post.createdAt,
       );
       _voiceService.announceRiskPoint(riskPoint, distance);
@@ -1843,10 +1951,12 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
   List<Marker> _buildAdLogoMarkers() {
     return _nearbyAds
-        .where((ad) =>
-            ad.type == AdType.mapLogo &&
-            ad.latitude != null &&
-            ad.longitude != null)
+        .where(
+          (ad) =>
+              ad.type == AdType.mapLogo &&
+              ad.latitude != null &&
+              ad.longitude != null,
+        )
         .map((ad) {
           return Marker(
             point: LatLng(ad.latitude!, ad.longitude!),
@@ -1862,10 +1972,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
                 decoration: BoxDecoration(
                   color: CupertinoColors.white,
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: const Color(0xFF007AFF),
-                    width: 2,
-                  ),
+                  border: Border.all(color: const Color(0xFF007AFF), width: 2),
                   boxShadow: [
                     BoxShadow(
                       color: CupertinoColors.black.withOpacity(0.2),
@@ -1881,10 +1988,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
                           fit: BoxFit.cover,
                           errorBuilder: (context, error, stackTrace) =>
                               const Icon(
-                            CupertinoIcons.building_2_fill,
-                            color: Color(0xFF007AFF),
-                            size: 20,
-                          ),
+                                CupertinoIcons.building_2_fill,
+                                color: Color(0xFF007AFF),
+                                size: 20,
+                              ),
                         ),
                       )
                     : const Icon(
@@ -1919,11 +2026,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
               ),
             ],
             const SizedBox(height: 12),
-            Text(ad.title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                )),
+            Text(
+              ad.title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
             Text(ad.content),
             if (ad.merchantAddress != null) ...[
@@ -2340,7 +2446,10 @@ class _NavigationScreenState extends State<NavigationScreen> {
                 ),
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 300),
-                  child: _showingStatus && (_currentStatusDisplay != null || _currentNotification != null)
+                  child:
+                      _showingStatus &&
+                          (_currentStatusDisplay != null ||
+                              _currentNotification != null)
                       ? _buildStatusContent()
                       : _buildDirectionContent(),
                 ),
@@ -3077,7 +3186,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
     if (_currentNotification != null) {
       return _buildNotificationContent(_currentNotification!);
     }
-    
+
     if (_currentStatusDisplay == null) return const SizedBox();
 
     return Row(
@@ -3161,7 +3270,9 @@ class _NavigationScreenState extends State<NavigationScreen> {
 
     // Calculate distance if available
     String distanceText = '';
-    if (post.latitude != null && post.longitude != null && _currentPosition != null) {
+    if (post.latitude != null &&
+        post.longitude != null &&
+        _currentPosition != null) {
       final distance = Geolocator.distanceBetween(
         _currentPosition!.latitude,
         _currentPosition!.longitude,
@@ -3185,11 +3296,7 @@ class _NavigationScreenState extends State<NavigationScreen> {
             color: notificationColor.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: Icon(
-            notificationIcon,
-            color: notificationColor,
-            size: 28,
-          ),
+          child: Icon(notificationIcon, color: notificationColor, size: 28),
         ),
         const SizedBox(width: 12),
         Expanded(

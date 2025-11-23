@@ -10,7 +10,7 @@ class RoadDamageService {
   final List<double> _accelerationHistory = [];
   final int _historySize = 10; // Keep last 10 readings
   final double _damageThreshold =
-      2.5; // m/s² threshold for road damage detection
+      5.0; // m/s² threshold for road damage detection (increased to only detect potholes, not bumps)
   Position? _lastPosition;
   DateTime? _lastDamageDetection;
   final Duration _cooldownPeriod = const Duration(seconds: 5); // Prevent spam

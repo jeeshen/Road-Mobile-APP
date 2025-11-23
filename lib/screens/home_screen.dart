@@ -13,6 +13,8 @@ import '../services/firebase_service.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
 import '../services/chatgpt_service.dart';
+import '../services/nlp_service.dart';
+import 'package:uuid/uuid.dart';
 import '../services/analytics_service.dart' hide RiskLevel;
 import '../services/road_damage_service.dart';
 import '../services/location_sharing_service.dart';
@@ -59,6 +61,8 @@ class _HomeScreenState extends State<HomeScreen> {
     apiKey:
         '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',
   );
+  final NLPService _nlpService = NLPService();
+  final Uuid _uuid = const Uuid();
   List<District> _districts = [];
   List<Post> _allPosts = [];
   List<UserLocation> _userLocations = [];
@@ -189,6 +193,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // Monitoring will be started when user enables driving mode via long press on GPS button
   }
 
+  /// Handle road damage detection - automatically create post
   Future<void> _handleRoadDamageDetected(
     Position position,
     double severity,
@@ -200,38 +205,63 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     if (nearestDistrict == null) return;
 
-    // Show alert to user
-    if (mounted) {
-      showCupertinoDialog(
-        context: context,
-        builder: (context) => CupertinoAlertDialog(
-          title: const Text('Road Damage Detected'),
-          content: Text(
-            'Road damage detected at your location.\n\n'
-            'Severity: ${(severity * 100).toStringAsFixed(0)}%\n'
-            'Location: ${nearestDistrict.name}',
-          ),
-          actions: [
-            CupertinoDialogAction(
-              child: const Text('Cancel'),
-              onPressed: () => Navigator.pop(context),
-            ),
-            CupertinoDialogAction(
-              isDefaultAction: true,
-              child: const Text('Report'),
-              onPressed: () {
-                Navigator.pop(context);
-                _navigateToCreatePostWithLocation(
-                  nearestDistrict,
-                  LatLng(position.latitude, position.longitude),
-                  isRoadDamage: true,
-                  roadDamageSeverity: severity,
-                );
-              },
-            ),
-          ],
-        ),
+    try {
+      // Generate AI content for the post
+      String title = 'Road Damage Detected';
+      String content =
+          'Road damage detected in ${nearestDistrict.name}. '
+          'Severity level: ${(severity * 100).toStringAsFixed(0)}%. '
+          'Please drive with caution in this area.';
+
+      final chatGPTService = _chatGPTService;
+      if (chatGPTService != null) {
+        try {
+          final aiReport = await chatGPTService.generateRoadDamageReport(
+            nearestDistrict.name,
+            nearestDistrict.state,
+            severity,
+            position.latitude,
+            position.longitude,
+          );
+          title = aiReport['title'] ?? title;
+          content = aiReport['content'] ?? content;
+        } catch (e) {
+          print('Error generating AI content: $e');
+          // Use fallback content
+        }
+      }
+
+      // Create post
+      final activeUserId = _currentUser?.id ?? 'guest_user';
+      final displayName = _currentUser?.name.isNotEmpty == true
+          ? _currentUser!.name
+          : 'Anonymous';
+
+      Post post = Post(
+        id: _uuid.v4(),
+        districtId: nearestDistrict.id,
+        userId: activeUserId,
+        username: displayName,
+        title: title,
+        content: content,
+        category: PostCategory.pothole,
+        mediaUrls: [],
+        createdAt: DateTime.now(),
+        latitude: position.latitude,
+        longitude: position.longitude,
+        isRoadDamage: true,
       );
+
+      // Apply NLP analysis for auto-tagging and risk level
+      post = _nlpService.enhancePost(post);
+
+      // Save post to Firebase (no media files)
+      await _firebaseService.createPost(post, []);
+
+      print('Road damage post auto-created: ${post.id}');
+    } catch (e) {
+      print('Error auto-creating road damage post: $e');
+      // Silently fail - don't show any error to user
     }
   }
 
