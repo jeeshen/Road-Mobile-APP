@@ -31,7 +31,7 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyBF9s3asKPapt_6FUZdk_FJTNxp0srtJMA',
+    apiKey: 'AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
     appId: '1:1057173770504:web:8d016a62a06b5f43bbdcbd',
     messagingSenderId: '1057173770504',
     projectId: 'roadmobile-81d37',
@@ -41,7 +41,7 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyA-km9aL5LOyKNxsUfHXCplkMFAjC_Wbpw',
+    apiKey: 'AIzaSyYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY',
     appId: '1:1057173770504:android:ece9c4f4e1997717bbdcbd',
     messagingSenderId: '1057173770504',
     projectId: 'roadmobile-81d37',
@@ -49,7 +49,7 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyDWYyVJ8-7AdiQIn40zm85Mhf_-t6LmK1E',
+    apiKey: 'AIzaSyZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ',
     appId: '1:1057173770504:ios:9b3e0150e40dddafbbdcbd',
     messagingSenderId: '1057173770504',
     projectId: 'roadmobile-81d37',
@@ -58,7 +58,7 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyDWYyVJ8-7AdiQIn40zm85Mhf_-t6LmK1E',
+    apiKey: 'AIzaSyZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ',
     appId: '1:1057173770504:ios:9b3e0150e40dddafbbdcbd',
     messagingSenderId: '1057173770504',
     projectId: 'roadmobile-81d37',
@@ -67,7 +67,7 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyBF9s3asKPapt_6FUZdk_FJTNxp0srtJMA',
+    apiKey: 'AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
     appId: '1:1057173770504:web:4c51a3dd17064ca7bbdcbd',
     messagingSenderId: '1057173770504',
     projectId: 'roadmobile-81d37',
@@ -75,7 +75,4 @@ class DefaultFirebaseOptions {
     storageBucket: 'roadmobile-81d37.firebasestorage.app',
     measurementId: 'G-74VQYYSYHR',
   );
-
 }
-
-

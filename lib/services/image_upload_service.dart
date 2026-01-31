@@ -10,7 +10,7 @@ class ImageUploadService {
   // Alternative: You can use Cloudinary, Imgur, or your own server
   static const String _uploadUrl = 'https://api.imgbb.com/1/upload';
   static const String _apiKey =
-      '70a02853376856de922940a801416ef0'; // Get free at https://api.imgbb.com/
+      'FAKE_IMGBB_API_KEY_REPLACE_ME'; // Get free at https://api.imgbb.com/
 
   /// Upload image to ImgBB and return URL
   /// Falls back to base64 if upload fails
