@@ -16,7 +16,7 @@ A Flutter-based community navigation app for Malaysia with real-time traffic upd
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/road-mobile.git
+git clone https://github.com/jeeshen/road-mobile.git
 
 # Navigate to project directory
 cd road-mobile
